@@ -141,7 +141,14 @@ Repo secrets:
 | `TEST_GMAIL_OAUTH2_CLIENT_ID` | GCP Desktop OAuth2 client ID (paired with refresh token) |
 | `TEST_GMAIL_OAUTH2_CLIENT_SECRET` | GCP Desktop OAuth2 client secret (paired with refresh token) |
 
-Repo variables: `INTAKE_WEBAPP_URL`, `INTAKE_SPREADSHEET_ID`, `COURSE_REG_WEBAPP_URL`, `COURSE_REG_SPREADSHEET_ID`, `BURNER_GITHUB_USERNAME`, `BURNER_GMAIL`, `MORPHOCLOUDINSTANCESTEST_REPO`
+Repo variables: `INTAKE_WEBAPP_URL`, `INTAKE_SPREADSHEET_ID`, `COURSE_REG_WEBAPP_URL`, `COURSE_REG_SPREADSHEET_ID`, `BURNER_GITHUB_USERNAME`, `BURNER_GMAIL`, `MORPHOCLOUDINSTANCESTEST_REPO`, `INTAKE_TEMPLATES_URL`, `COURSE_REG_TEMPLATES_URL`, `MORPHOCLOUD_SENDER_EMAIL`
+
+### 0.6 Email Domain + Template Config (update when email migration is executed)
+
+- Set `INTAKE_TEMPLATES_URL` = `https://raw.githubusercontent.com/muratmaga/MorphoCloudPortalContent/main/templates/intake.json`
+- Set `COURSE_REG_TEMPLATES_URL` = `https://raw.githubusercontent.com/muratmaga/MorphoCloudPortalContent/main/templates/course-registration.json`
+- Set `MORPHOCLOUD_SENDER_EMAIL` = current sender address (`morphocloudportal@gmail.com` before email domain migration; `portal@morphocloud.org` after). `gmail_helper.py` uses this when filtering inbox search results by sender.
+- **After email domain migration**: verify the `portal@morphocloud.org` "Send mail as" alias is configured in `morphocloudportal@gmail.com` Gmail settings (required for GAS to send via `GmailApp` as the new address), then update `MORPHOCLOUD_SENDER_EMAIL` to `portal@morphocloud.org`
 
 ---
 
@@ -156,7 +163,8 @@ MorphoCloudE2ETests/
 │   ├── gmail_helper.py               (Gmail API search via OAuth2 refresh token; path-specific timeouts: 2 min for direct-send, 5 min for GitHub-forwarded course emails)
 │   ├── google_sheets_helper.py       (find row by email + recency; eventual-consistency retry)
 │   ├── github_helper.py              (create issue, post comment, read labels, accept invite w/ backoff)
-│   └── gas_helper.py                 (HTTP POST form, call web app endpoints; 3-retry on 5xx for GAS cold-start)
+│   ├── gas_helper.py                 (HTTP POST form, call web app endpoints; 3-retry on 5xx for GAS cold-start)
+│   └── portal_content_helper.py      (fetches intake.json + course-registration.json from MorphoCloudPortalContent at test-run start; pre-flight URL validation; exposes live template values as expected strings for all GAS-sent email assertions)
 ├── scenarios/
 │   ├── individual/
 │   │   ├── test_individual_intake.py      (Group A)
@@ -201,6 +209,8 @@ concurrency:
 ## Phase 3 — Test Scenario Steps
 
 **Key principle**: The harness *initiates* actions via GitHub API and GAS web app calls, then *polls* `MorphoCloudInstancesTest` issue state and the burner inbox. The actual provisioning happens inside `MorphoCloudInstancesTest`'s workflows — the harness never needs OpenStack access directly.
+
+**Email assertion strategy**: GAS-sent emails (verification emails, instructor approval/rejection emails) have template-driven subjects and bodies — `portal_content_helper.py` fetches both template JSONs from `MorphoCloudPortalContent` at test-run start and surfaces their live values as the expected strings in all inbox assertions. No email subject or body string is ever hardcoded in the test code. GitHub Actions-sent credential emails (sent after `/create`) are not yet template-driven and may match against fixed structural patterns (e.g., presence of an IP address and passphrase).
 
 ### Scenario: Individual — Group A (Intake Only)
 
@@ -268,7 +278,7 @@ Same 8 steps as Individual Group A but submits `workshop` intake type. Additiona
 | C | `GET COURSE_REG_WEBAPP_URL?action=approve&token=<token>` (Step 1 — confirmation page, no side effects) | ✅ |
 | D | `GET COURSE_REG_WEBAPP_URL?action=do-approve&token=<token>` (Step 2 — actual approval) | ✅ |
 | E | Assert GitHub team created with expected name + `duration:Nd` in description | ✅ GitHub API |
-| F | Search burner Gmail inbox via Gmail API for instructor approval email containing the pre-filled issue URL | ✅ Gmail API |
+| F | Search burner Gmail inbox via Gmail API for instructor approval email — subject matched against `instructor_approved_subject` from live `COURSE_REG_TEMPLATES_URL`; assert body contains the pre-filled issue URL | ✅ Gmail API |
 
 > **Fallback if service account unavailable**: Steps B–D are replaced by printing the approval URL and pausing with `input("Press Enter after approving in browser...")`. In CI (`CI=true`), the step is marked `SKIPPED`.
 
@@ -307,7 +317,7 @@ In CI mode (`CI=true`, non-interactive): marks the step `SKIPPED` — not a fail
 
 ## Phase 5 — Cleanup Strategy
 
-Membership cleanup is handled at **two layers** for different reasons:
+Membership cleanup is handled at **three layers** for different reasons:
 
 ### Layer 1 — Pre-test guard (start of every scenario, mandatory)
 
@@ -315,7 +325,9 @@ Before submitting any form, the harness runs the following checks unconditionall
 
 1. **Remove burner org membership** if currently a member (idempotent; 404 = already clean). This is a correctness precondition — a leftover membership from a crashed run would make “assert burner becomes a member after verification” a vacuous assertion.
 
-2. **Detect and drain orphaned OpenStack instances** from previous failed Group B runs. A test that crashes after OpenStack provisioning but before `/delete_all` leaves a live instance consuming JetStream2 quota. The guard:
+2. **Template JSON pre-flight**: `GET` both `INTAKE_TEMPLATES_URL` and `COURSE_REG_TEMPLATES_URL`, assert HTTP 200 and parseable JSON. If either fails, abort immediately with: “Template JSON unreachable — GAS would send blank emails; tests cannot assert email content.” This surfaces misconfiguration and `MorphoCloudPortalContent` outages before any form is submitted.
+
+3. **Detect and drain orphaned OpenStack instances** from previous failed Group B runs. A test that crashes after OpenStack provisioning but before `/delete_all` leaves a live instance consuming JetStream2 quota. The guard:
    - Queries `MorphoCloudInstancesTest` for any open issues authored by the burner account that carry the `test-harness` label
    - For each found: posts `/delete_all` as the admin app token and polls for the issue to close (timeout: 10 min)
    - Only proceeds to the new test scenario once no open burner issues remain
@@ -366,7 +378,7 @@ After each scenario (pass *or* fail), the harness runs teardown. Failures in tea
 ## Verification Steps
 
 1. `pytest --co` in `MorphoCloudE2ETests` — all test IDs resolve, no import errors
-2. `pytest -m "group_a and individual"` — completes in < 2 min with no OpenStack usage; asserts IMAP and Sheets access work
+2. `pytest -m "group_a and individual"` — completes in < 2 min with no OpenStack usage; asserts Gmail API and Sheets access work
 3. `pytest -m "group_a"` — all three intake paths pass (individual, workshop, course)
 4. `pytest -m "group_b and individual"` — on self-hosted runner; `status:running` label appears within 20-min timeout; credential email arrives at burner Gmail
 5. Manual check: verify that `skip_cleanup=false` leaves no residual org memberships, open issues, or orphan OpenStack instances
@@ -383,7 +395,7 @@ After each scenario (pass *or* fail), the harness runs teardown. Failures in tea
 
 4. **GitHub invite propagation delay**: After GAS dispatches the org invite, the GitHub API `GET /user/memberships/orgs/MorphoCloud` may return 404 for a few seconds. `github_helper.py` must implement retry with exponential backoff (e.g., 2s → 4s → 8s → 16s, up to ~60s total) for the invite-acceptance step specifically.
 
-5. **GAS cold-start and execution limits**: GAS has a 6-minute execution limit and can return `502` or `504` when the script engine is cold or a concurrent execution is already in progress ("Task already in progress"). All `POST` and `GET` calls in `gas_helper.py` must include a **3-retry loop with a fixed 5-second wait** between attempts before raising. This is distinct from the GitHub invite backoff — GAS retries are fixed-interval (cold-start recovery), not exponential. GAS can also return `429 Too Many Requests` under rapid burst traffic; the Chunk 2 stress test will determine whether this needs a separate back-off path or whether the existing fixed-interval loop is sufficient. Additionally, if a prior `onFormSubmit` trigger is still running when the Sheets API is queried, the sheet row may be locked for writing; `google_sheets_helper.py` must treat a `503 Service Unavailable` or `Resource Busy` response from the Sheets API as a transient error and retry with the same 30-second patience window already applied for eventual consistency.
+5. **GAS cold-start and execution limits**: GAS has a 6-minute execution limit and can return `502` or `504` when the script engine is cold or a concurrent execution is already in progress ("Task already in progress"). All `POST` and `GET` calls in `gas_helper.py` must include a **3-retry loop with a fixed 5-second wait** between attempts before raising. This is distinct from the GitHub invite backoff — GAS retries are fixed-interval (cold-start recovery), not exponential. GAS can also return `429 Too Many Requests` under rapid burst traffic; the Chunk 2 stress test will determine whether this needs a separate back-off path or whether the existing fixed-interval loop is sufficient. Additionally, the `loadTemplates()` function in both `intake.gs` and `course-registration.gs` calls `UrlFetchApp.fetch()` to retrieve the template JSON on a cache miss — this fetch runs inside the same 6-minute execution budget, before `MailApp.sendEmail()`. The GAS `CacheService` cache is internal to the script execution environment and is not warmed by the Layer 1 pre-flight check (which hits the raw GitHub URL from outside GAS); a true cache warm requires a prior GAS execution that called `loadTemplates()` successfully. If a prior `onFormSubmit` trigger is still running when the Sheets API is queried, the sheet row may be locked for writing; `google_sheets_helper.py` must treat a `503 Service Unavailable` or `Resource Busy` response from the Sheets API as a transient error and retry with the same 30-second patience window already applied for eventual consistency.
 
 6. **GitHub App: JWT → Installation ID → Installation Token**: The `conftest.py` GitHub App authentication flow is three steps, not two. The App ID + Private Key generate a **JWT** (valid 10 min). That JWT is used to call `GET /app/installations` to find the **Installation ID** for the `MorphoCloud` org. The Installation ID is then exchanged for a short-lived **installation token** via `POST /app/installations/{id}/access_tokens`. Only that final token can be used in API calls. The JWT alone cannot call org or repo endpoints. `conftest.py` must implement all three steps and cache the installation token (reusing it until expiry rather than regenerating on every helper call).
 
@@ -396,6 +408,10 @@ After each scenario (pass *or* fail), the harness runs teardown. Failures in tea
 10. **PAT rotation testing**: Out of scope for this suite. The PAT in GAS Script Properties is a live credential — rotation is a separate operational procedure tracked in morphocloud-requirements.md.
 
 11. **Email delivery as a tester-assisted step**: Verifying that credential emails are *readable and correct-looking* (not just machine-assert-able) is kept as an optional human spot-check. The harness asserts structure (IP address regex, passphrase present) but does not render HTML or validate formatting. Tester can inspect the raw email from burner Gmail if the visual format needs to be verified.
+
+12. **Template externalization and `MorphoCloudPortalContent`**: `intake.gs` and `course-registration.gs` (in the `externalize-templates` branch, not yet merged to main) load all user-facing text (email subjects, bodies, HTML page messages) from JSON files in `muratmaga/MorphoCloudPortalContent` at runtime, cached for 5 minutes via GAS `CacheService`. Three implications for the test harness: **(a) No hardcoded email strings** — `portal_content_helper.py` fetches the live template values at test-run start and uses them as expected assertion values, so tests remain valid regardless of future template edits; **(b) New silent failure mode** — if the GitHub raw URL for a template is unreachable, GAS falls back to an empty object and sends emails with blank subject and body; the Layer 1 pre-flight check surfaces this before any form is submitted; **(c) Cache lag** — if templates are edited between the pre-flight fetch and the actual form submission, the GAS-cached version (up to 5 min old) may differ from what the harness expects; never edit `MorphoCloudPortalContent` templates mid-run.
+
+13. **Email domain migration (`portal@morphocloud.org`)**: When the email migration in `email-migration.md` is executed, two changes affect the harness: **(a)** `MORPHOCLOUD_SENDER_EMAIL` must be updated from `morphocloudportal@gmail.com` to `portal@morphocloud.org` so `gmail_helper.py` inbox searches filter by the correct sender; **(b)** The GAS `MailApp` → `GmailApp` switch (Part 2 of the migration) requires the `portal@morphocloud.org` "Send mail as" Gmail alias to be configured and verified before the updated scripts are deployed — add this alias check to the Phase 0 §0.6 checklist. No code changes are needed in the test harness itself beyond updating the `MORPHOCLOUD_SENDER_EMAIL` variable.
 
 ---
 
@@ -419,7 +435,8 @@ Each chunk ends in a runnable, verifiable state. No chunk leaves the repo partia
 - `google_sheets_helper.py` — service account auth; row lookup by email + recency; eventual-consistency retry; 503/Resource Busy handling
 - `gmail_helper.py` — OAuth2 refresh token exchange; Gmail API inbox search; path-specific timeouts (2 min direct, 5 min forwarded)
 - `gas_helper.py` — form `POST`; web app `GET`; 3-retry fixed-interval loop for GAS cold-start; `429 Too Many Requests` handler
-- Lightweight integration test per helper: authenticate + read/call something real (does not mutate state)
+- `portal_content_helper.py` — fetches both template JSONs from `INTAKE_TEMPLATES_URL` and `COURSE_REG_TEMPLATES_URL`; validates HTTP 200 + parseable JSON; exposes live values as assertion targets
+- Lightweight integration test per helper: authenticate + read/call something real (does not mutate state); template pre-flight test asserts both URLs return 200 + valid JSON with expected keys (`verify_email_subject`, `instructor_approved_subject`, `contact_email`, etc.)
 - **GAS cold-start stress test**: call the web app endpoint 4–5 times in rapid succession and assert every call either succeeds or retries cleanly within the fixed-interval loop. Use results to tune the retry interval (5 s default) and confirm whether `429` responses need a separate back-off path distinct from `502`/`504`.
 
 **Done when**: `pytest tests/helpers/` — all four helpers authenticate and communicate with live services using stored secrets; GAS stress test completes without unhandled exceptions regardless of engine warmth.
