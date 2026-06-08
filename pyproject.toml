@@ -1,0 +1,26 @@
+[project]
+name = "morphocloud-e2e"
+version = "0.1.0"
+description = "End-to-end test harness for MorphoCloudWorkflow (individual + workshop), run against MorphoCloud/Test-Instances."
+requires-python = ">=3.10"
+dependencies = [
+    "pytest>=8.0",
+    "requests>=2.31",
+]
+
+# IMAP uses the stdlib (imaplib/email); OpenStack assertions shell out to the
+# `openstack` CLI (read-only clouds.yaml entry) — no heavy SDK deps on purpose.
+
+[tool.pytest.ini_options]
+testpaths = ["e2e/scenarios"]
+addopts = "-ra"
+markers = [
+    "cheap: no provisioning, C=0 (Milestone 1)",
+    "individual: individual instance lifecycle, C=1 (Milestone 2)",
+    "workshop: workshop lifecycle, C=2 (Milestone 3)",
+    "lifecycle: expiry/renewal/cleanup via label-injection + dispatch (Milestone 4)",
+    "provision: marks a test that creates a real (cheap) OpenStack instance",
+]
+
+[tool.ruff]
+line-length = 100

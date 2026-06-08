@@ -1,0 +1,122 @@
+name: E2E
+
+# On-demand only (Decision 3). Stage 0 (vendorize MWF -> Test-Instances) runs first via
+# the pytest session fixture; secrets/inputs configure the run. The heavy provisioning
+# happens on Test-Instances' self-hosted runner — this job only orchestrates + asserts.
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Which suite to run"
+        type: choice
+        default: cheap
+        options: [cheap, individual, workshop, lifecycle, all]
+      mwf_ref:
+        description: "MorphoCloudWorkflow ref to vendorize from"
+        type: string
+        default: main
+      flavor:
+        description: "Override E2E_FLAVOR (still subject to the denylist)"
+        type: string
+        default: ""
+      sweep_only:
+        description: "Run the sweeper and exit (skip Stage 0 + scenarios)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: e2e-${{ github.repository }}   # concurrency = 1
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Checkout MorphoCloudWorkflow (vendorize source)
+        uses: actions/checkout@v4
+        with:
+          repository: MorphoCloud/MorphoCloudWorkflow
+          ref: ${{ github.event.inputs.mwf_ref }}
+          path: _mwf
+          token: ${{ secrets.E2E_ADMIN_PAT }}
+
+      - name: Checkout Test-Instances (vendorize target + push)
+        uses: actions/checkout@v4
+        with:
+          repository: MorphoCloud/Test-Instances
+          path: _test-instances
+          fetch-depth: 0
+          token: ${{ secrets.E2E_ADMIN_PAT }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip pipx nox
+          pip install -e .
+          pip install python-openstackclient
+
+      - name: Configure OpenStack clouds.yaml (optional)
+        if: ${{ env.E2E_OS_CLOUDS_YAML != '' }}
+        env:
+          E2E_OS_CLOUDS_YAML: ${{ secrets.E2E_OS_CLOUDS_YAML }}
+        run: |
+          mkdir -p ~/.config/openstack
+          printf '%s' "$E2E_OS_CLOUDS_YAML" > ~/.config/openstack/clouds.yaml
+
+      - name: Run
+        env:
+          E2E_MWF_DIR: ${{ github.workspace }}/_mwf
+          E2E_TEST_INSTANCES_DIR: ${{ github.workspace }}/_test-instances
+          E2E_BOT_PAT: ${{ secrets.E2E_BOT_PAT }}
+          E2E_ADMIN_PAT: ${{ secrets.E2E_ADMIN_PAT }}
+          E2E_EXTRA_USER_PAT: ${{ secrets.E2E_EXTRA_USER_PAT }}
+          E2E_IMAP_HOST: ${{ secrets.E2E_IMAP_HOST }}
+          E2E_IMAP_USER: ${{ secrets.E2E_IMAP_USER }}
+          E2E_IMAP_PASSWORD: ${{ secrets.E2E_IMAP_PASSWORD }}
+          E2E_OS_CLOUD: ${{ secrets.E2E_OS_CLOUD }}
+          E2E_FLAVOR: ${{ github.event.inputs.flavor }}
+          SUITE: ${{ github.event.inputs.suite }}
+          SWEEP_ONLY: ${{ github.event.inputs.sweep_only }}
+        run: |
+          set -euo pipefail
+          # Default E2E_FLAVOR if the input was blank.
+          [ -z "${E2E_FLAVOR:-}" ] && export E2E_FLAVOR=m3.tiny
+
+          if [ "$SWEEP_ONLY" = "true" ]; then
+            python -m e2e.sweeper
+            exit 0
+          fi
+
+          case "$SUITE" in
+            cheap)      MARK="cheap" ;;
+            individual) MARK="individual"; export E2E_PROVISION=1 ;;
+            workshop)   MARK="workshop";   export E2E_PROVISION=1 ;;
+            lifecycle)  MARK="lifecycle";  export E2E_PROVISION=1 ;;
+            all)        MARK="";           export E2E_PROVISION=1 ;;
+          esac
+
+          if [ -n "$MARK" ]; then
+            pytest -m "$MARK" --junitxml=report.xml
+          else
+            pytest --junitxml=report.xml
+          fi
+
+      - name: Sweep leftovers (always)
+        if: ${{ always() && github.event.inputs.sweep_only != 'true' }}
+        env:
+          E2E_ADMIN_PAT: ${{ secrets.E2E_ADMIN_PAT }}
+          E2E_OS_CLOUD: ${{ secrets.E2E_OS_CLOUD }}
+        run: python -m e2e.sweeper --min-age-hours 0 || true
+
+      - name: Upload report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: report.xml
+          if-no-files-found: ignore

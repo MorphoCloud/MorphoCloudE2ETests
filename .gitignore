@@ -1,0 +1,19 @@
+# Local secrets / config — NEVER commit
+.env
+.env.*
+clouds.yaml
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.nox/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Test artifacts
+report.xml
+e2e/baseline/captured.json
