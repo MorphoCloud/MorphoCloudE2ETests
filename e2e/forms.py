@@ -36,18 +36,24 @@ def workshop_body(
     duration_days: int = 1,
     number_of_instances: int = 2,
     start_date: str | None = None,
-    start_time: str = "09:00",
+    start_time: str | None = None,
     timezone_label: str = "UTC",
     description: str | None = None,
 ) -> str:
     """Build a workshop-request body.
 
-    Defaults to start_date = today (UTC) so `start − 12h` is already in the past and
-    `/create` is allowed. Override start_date with a far-future date to exercise the
-    12-hour create-window rejection.
+    Defaults to a start ~3 h in the future (UTC): far enough ahead that request-time
+    validation accepts it (a *past* start is rejected with needs-fix), yet `start − 12h`
+    is already in the past so `/create` is immediately allowed. Override start_date with
+    a far-future date to exercise the 12-hour create-window rejection, or with a bad
+    value to exercise the malformed-date rejection.
     """
-    if start_date is None:
-        start_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if start_date is None and start_time is None:
+        dt = datetime.now(timezone.utc) + timedelta(hours=3)
+        start_date = dt.strftime("%Y-%m-%d")
+        start_time = dt.strftime("%H:%M")
+    elif start_time is None:
+        start_time = "09:00"
     if description is None:
         description = (
             f"**Workshop name:** {_TAG}\n\n"

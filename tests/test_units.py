@@ -52,9 +52,11 @@ def test_workshop_body_fields_and_default_date():
                     "Number of Instances", "Workshop start date", "Workshop start time",
                     "Timezone", "Description"):
         assert f"### {heading}" in body
-    # default start date is today (UTC) so start-12h is already past -> /create allowed
+    # default start is ~3h in the future (UTC) — valid (not past) yet start-12h is past
+    # so /create is allowed. The date is whatever now+3h falls on (today or tomorrow).
     import datetime as dt
-    assert dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d") in body
+    soon = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=3)).strftime("%Y-%m-%d")
+    assert soon in body
 
 
 # -- openstack naming ------------------------------------------------------------------

@@ -81,14 +81,31 @@ class GitHubClient:
 
     # -- low-level ---------------------------------------------------------------------
 
+    # Transient failures to retry: connection drops/timeouts (long polls span ~40 min,
+    # so a brief network blip must not crash the run) and transient server statuses.
+    _RETRY_STATUS = {429, 500, 502, 503, 504}
+    _RETRY_ATTEMPTS = 6
+
     def _req(self, method: str, path: str, **kw) -> requests.Response:
         url = path if path.startswith("http") else f"{API}{path}"
-        resp = self.session.request(method, url, timeout=30, **kw)
-        if resp.status_code >= 300:
-            raise GitHubError(
-                f"{method} {url} -> {resp.status_code}: {resp.text[:400]}"
-            )
-        return resp
+        last = None
+        for attempt in range(self._RETRY_ATTEMPTS):
+            try:
+                resp = self.session.request(method, url, timeout=30, **kw)
+            except (requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout) as exc:
+                last = exc
+            else:
+                if resp.status_code < 300:
+                    return resp
+                if resp.status_code in self._RETRY_STATUS and attempt < self._RETRY_ATTEMPTS - 1:
+                    last = GitHubError(f"{method} {url} -> {resp.status_code} (transient)")
+                else:
+                    raise GitHubError(
+                        f"{method} {url} -> {resp.status_code}: {resp.text[:400]}"
+                    )
+            time.sleep(min(2 ** attempt, 30))  # 1,2,4,8,16,30 — ~60s of resilience
+        raise GitHubError(f"{method} {url} failed after {self._RETRY_ATTEMPTS} attempts: {last}")
 
     def whoami(self) -> str:
         return self._req("GET", "/user").json()["login"]
