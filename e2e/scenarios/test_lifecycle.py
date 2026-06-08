@@ -66,7 +66,7 @@ def test_auto_shelve(bot, admin, os_client, ensure_test_labels, issues):
     admin.dispatch_workflow("automatic-instance-shelving.yml")
     admin.wait_for_run("automatic-instance-shelving.yml", since=since,
                        timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
-    lc.assert_status_label(admin, num, "shelved")
+    lc.assert_status_label(admin, num, "shelved", "shelved_offloaded")
     if os_client.available():
         poll(lambda: os_client.server_status(openstack.instance_name(num)) == "SHELVED_OFFLOADED",
              timeout=config.TIMEOUT_COMMAND, desc="SHELVED_OFFLOADED")

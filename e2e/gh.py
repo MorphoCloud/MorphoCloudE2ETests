@@ -207,6 +207,16 @@ class GitHubClient:
             path += f"&event={event}"
         return self._req("GET", path).json().get("workflow_runs", [])
 
+    def failed_steps(self, run_id: int) -> list[str]:
+        """Names of the steps that concluded 'failure' in a run (across its jobs)."""
+        jobs = self._req("GET", f"/repos/{self.repo}/actions/runs/{run_id}/jobs").json()
+        return [
+            step["name"]
+            for job in jobs.get("jobs", [])
+            for step in job.get("steps", [])
+            if step.get("conclusion") == "failure"
+        ]
+
     def wait_for_run(self, filename: str, *, since: datetime, timeout: float,
                      event: str | None = None) -> dict[str, Any] | None:
         """Wait for the newest run of `filename` created at/after `since` to complete.

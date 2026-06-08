@@ -27,7 +27,12 @@ def _load_dotenv() -> None:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
+        value = value.strip()
+        # Strip an inline `# comment` from UNQUOTED values (secrets are file-based, so
+        # .env only ever holds non-secret config — safe to treat ' #' as a comment).
+        if value and value[0] not in ("'", '"'):
+            value = re.split(r"\s+#", value, maxsplit=1)[0].strip()
+        value = value.strip('"').strip("'")
         os.environ.setdefault(key, value)
 
 

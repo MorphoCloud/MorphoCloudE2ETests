@@ -16,7 +16,7 @@ import pytest
 
 from e2e import config, openstack
 from e2e.gh import GitHubClient
-from e2e.sweeper import Sweeper
+from e2e.sweeper import Sweeper, SweepResult
 
 
 # --------------------------------------------------------------------------------------
@@ -88,6 +88,18 @@ def inbox():
         yield mb
 
 
+@pytest.fixture()
+def inbox_optional():
+    """Like `inbox`, but yields None (instead of skipping) when IMAP isn't configured —
+    so a provisioning test can run and just skip its email assertions."""
+    if not config.imap_configured():
+        yield None
+        return
+    from e2e.mailbox import Mailbox
+    with Mailbox() as mb:
+        yield mb
+
+
 # --------------------------------------------------------------------------------------
 # Test-only labels — created on demand (idempotent), AFTER Stage 0 / any labels.yml sync.
 # Tests that need m3.tiny / expiration:0d / timeout:0hrs depend on this explicitly.
@@ -137,7 +149,7 @@ class IssueFactory:
 
 
 @pytest.fixture()
-def issues(bot, admin):
+def issues(bot, admin, os_client):
     # Pre-create every label the factory may apply, using the ADMIN (the bot's
     # fine-grained Issues:write token can apply existing labels but cannot *create*
     # them — passing a missing label on issue-open otherwise 403s). Idempotent.
@@ -146,6 +158,23 @@ def issues(bot, admin):
         admin.ensure_label(lbl)
     factory = IssueFactory(bot, admin)
     yield factory
+    # On provisioning runs, force-delete any instance/volume before closing the issue —
+    # so a test that fails MID-lifecycle (before its own /delete step) can't leak a VM.
+    # Idempotent: dispatching delete on an already-gone resource no-ops. Cheap runs
+    # create no resources, so this is skipped there.
+    if config.PROVISION_ENABLED and factory.opened:
+        sweeper = Sweeper(admin, os_client)
+        result = SweepResult()
+        for num in factory.opened:
+            try:
+                sweeper.force_clean_issue(num, result)
+            except Exception as exc:  # best-effort
+                warnings.warn(f"force-clean of #{num} failed: {exc}", stacklevel=2)
+        for num in set(result.deleted_instances) | set(result.deleted_volumes):
+            try:
+                sweeper.verify_gone(num)
+            except Exception:
+                pass
     factory.close_all()
 
 

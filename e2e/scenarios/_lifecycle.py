@@ -75,7 +75,14 @@ def command(bot: GitHubClient, admin: GitHubClient, issue: int, cmd: str,
     )
 
 
-def assert_status_label(admin: GitHubClient, issue: int, status: str,
+def assert_status_label(admin: GitHubClient, issue: int, *statuses: str,
                         timeout: float = config.TIMEOUT_COMMAND) -> None:
-    poll(lambda: f"status:{status}" in admin.labels(issue),
-         timeout=timeout, desc=f"status:{status} on #{issue}")
+    """Wait until the issue carries any one of the given status:* labels.
+
+    Accepts several because OpenStack distinguishes states the harness treats as
+    equivalent — e.g. a shelved instance reports SHELVED then SHELVED_OFFLOADED, so
+    callers pass ("shelved", "shelved_offloaded").
+    """
+    wanted = {f"status:{s}" for s in statuses}
+    poll(lambda: bool(wanted & set(admin.labels(issue))),
+         timeout=timeout, desc=f"status in {sorted(statuses)} on #{issue}")
