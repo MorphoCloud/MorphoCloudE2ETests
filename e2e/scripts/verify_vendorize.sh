@@ -7,8 +7,8 @@ set -euo pipefail
 
 commit="${1:-HEAD}"
 
-# Allowed top-level prefixes a vendorize commit may touch.
-allowed_re='^(\.github/|scripts/|cloud-config$|issue-commands\.md$|course-issue-commands\.md$|workshop-issue-commands\.md$)'
+# Allowed top-level prefixes a vendorize commit may touch (matches the noxfile vendorize paths).
+allowed_re='^(\.github/|scripts/|cloud-config$|\.pre-commit-config\.yaml$|issue-commands\.md$|course-issue-commands\.md$|workshop-issue-commands\.md$)'
 
 # Read changed files into an array WITHOUT mapfile (macOS ships bash 3.2, no mapfile).
 changed=()

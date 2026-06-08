@@ -138,6 +138,12 @@ class IssueFactory:
 
 @pytest.fixture()
 def issues(bot, admin):
+    # Pre-create every label the factory may apply, using the ADMIN (the bot's
+    # fine-grained Issues:write token can apply existing labels but cannot *create*
+    # them — passing a missing label on issue-open otherwise 403s). Idempotent.
+    for lbl in (config.E2E_LABEL, *config.INDIVIDUAL_REQUEST_LABELS,
+                *config.WORKSHOP_REQUEST_LABELS):
+        admin.ensure_label(lbl)
     factory = IssueFactory(bot, admin)
     yield factory
     factory.close_all()

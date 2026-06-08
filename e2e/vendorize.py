@@ -54,7 +54,13 @@ def _changed_files(repo: Path, commit: str = "HEAD") -> list[str]:
 
 
 def _lint_changed(repo: Path, files: list[str]) -> None:
-    """Best-effort actionlint + pre-commit on changed workflow files. Warn if tools absent."""
+    """Best-effort actionlint on changed workflow files (skipped if not installed).
+
+    Deliberately does NOT shell out to pre-commit: running pre-commit here is both
+    redundant (MWF's own ci.yml runs it on `main`, which is the vendorize source) and
+    risky — its hooks (e.g. prettier) create cruft (node_modules/.cache) in the target
+    that the next vendorize's `git add -A` would commit.
+    """
     workflows = [f for f in files if f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml"))]
     if not workflows:
         return
@@ -65,15 +71,6 @@ def _lint_changed(repo: Path, files: list[str]) -> None:
             raise Stage0Error(f"actionlint failed on vendorized workflows:\n{proc.stdout}\n{proc.stderr}")
     else:
         print("Stage 0: actionlint not installed — skipping workflow lint (MWF ci.yml covers main).")
-    if shutil.which("pre-commit") and (repo / ".pre-commit-config.yaml").exists():
-        proc = subprocess.run(
-            ["pre-commit", "run", "--files", *files,
-             "check-github-workflows", "check-github-actions"],
-            cwd=str(repo), capture_output=True, text=True,
-        )
-        # pre-commit returns non-zero on hook failure; surface it.
-        if proc.returncode != 0:
-            raise Stage0Error(f"pre-commit checks failed:\n{proc.stdout}\n{proc.stderr}")
 
 
 def run_stage0(*, push: bool = True) -> Stage0Result:
@@ -96,25 +93,44 @@ def run_stage0(*, push: bool = True) -> Stage0Result:
     )
 
     # The one sanctioned vendorize path (see feedback_morphocloud_dev_protocols).
-    _run(
+    # `--commit` runs `git commit`, which exits non-zero with "nothing to commit" when
+    # Test-Instances is already in sync. Tolerate exactly that no-op (working tree stays
+    # clean, HEAD unchanged); fail on any other vendorize error.
+    vend = subprocess.run(
         ["pipx", "run", "nox", "-s", "vendorize", "--", f"{target}/", "--commit"],
-        cwd=mwf, env=env,
+        cwd=str(mwf), env=env, capture_output=True, text=True,
     )
-
     after = _git(target, "rev-parse", "HEAD")
+    if vend.returncode != 0:
+        dirty = _git(target, "status", "--porcelain")
+        if dirty or after != before:
+            raise Stage0Error(
+                f"vendorize failed ({vend.returncode}):\nstdout:\n{vend.stdout}\n"
+                f"stderr:\n{vend.stderr}"
+            )
+        print("Stage 0: vendorize is a no-op (Test-Instances already in sync).")
     changed = after != before
-    if not changed:
-        print(f"Stage 0: Test-Instances already in sync with MWF@{mwf_sha[:9]} (no-op).")
-        return Stage0Result(mwf_sha=mwf_sha, changed=False, pushed=False)
 
-    # Commit-scope guard.
-    _run(["bash", str(_SCRIPT), "HEAD"], cwd=target)
-    # Lint the changed workflows.
-    _lint_changed(target, _changed_files(target))
+    # Push whenever local main is AHEAD of origin/main — not only when *this* run made a
+    # commit. This recovers the case where a prior run committed but failed to push (e.g.
+    # the guard rejected it), so the fix-and-rerun doesn't silently leave origin stale.
+    _git(target, "fetch", "origin", "main", "-q")
+    unpushed = [s for s in _git(target, "rev-list", "origin/main..HEAD").splitlines() if s]
+    if not unpushed:
+        print(f"Stage 0: Test-Instances already in sync with MWF@{mwf_sha[:9]} (nothing to push).")
+        return Stage0Result(mwf_sha=mwf_sha, changed=changed, pushed=False)
+
+    # Commit-scope guard on every unpushed commit, then lint the net changed files.
+    for sha in unpushed:
+        _run(["bash", str(_SCRIPT), sha], cwd=target)
+    net_changed = [ln for ln in _run(
+        ["git", "diff", "--name-only", "origin/main..HEAD"], cwd=target).stdout.splitlines() if ln]
+    _lint_changed(target, net_changed)
 
     pushed = False
     if push:
         _run(["git", "push", "origin", "HEAD:main"], cwd=target)
         pushed = True
-        print(f"Stage 0: vendorized MWF@{mwf_sha[:9]} → Test-Instances ({after[:9]}), pushed.")
-    return Stage0Result(mwf_sha=mwf_sha, changed=True, pushed=pushed)
+        print(f"Stage 0: synced Test-Instances → MWF@{mwf_sha[:9]} ({after[:9]}), "
+              f"pushed {len(unpushed)} commit(s).")
+    return Stage0Result(mwf_sha=mwf_sha, changed=changed, pushed=pushed)

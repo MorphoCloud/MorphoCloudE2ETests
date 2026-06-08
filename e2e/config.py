@@ -39,6 +39,23 @@ def _env(name: str, default: str | None = None) -> str | None:
     return val if val not in (None, "") else default
 
 
+def _secret(name: str) -> str | None:
+    """A secret from env `NAME`, or read from the file named by `NAME_FILE`.
+
+    The `_FILE` form keeps real secrets out of `.env` / process env — `.env` just holds
+    a path (e.g. E2E_BOT_PAT_FILE=~/.ssh/GH-morphocloud-e2e-token).
+    """
+    val = _env(name)
+    if val:
+        return val
+    path = _env(name + "_FILE")
+    if path:
+        p = Path(path).expanduser()
+        if p.exists():
+            return p.read_text().strip()
+    return None
+
+
 # --------------------------------------------------------------------------------------
 # Target repo / org — the harness ONLY ever touches Test-Instances.
 # --------------------------------------------------------------------------------------
@@ -109,9 +126,9 @@ WORKSHOP_REQUEST_LABELS = ("request-type:workshop", "request-creator:user")
 # Credentials (from env / Actions secrets). None -> the relevant tests skip.
 # --------------------------------------------------------------------------------------
 
-BOT_PAT = _env("E2E_BOT_PAT")              # mc-e2e-bot user PAT (NOT a GitHub App token)
-ADMIN_PAT = _env("E2E_ADMIN_PAT")          # admin (morphocloud-admins) PAT; falls back to gh
-EXTRA_USER_PAT = _env("E2E_EXTRA_USER_PAT")  # optional 2nd account, NOT in MorphoCloudUsers
+BOT_PAT = _secret("E2E_BOT_PAT")              # bot user PAT (NOT a GitHub App token)
+ADMIN_PAT = _secret("E2E_ADMIN_PAT")          # admin (morphocloud-admins) PAT; falls back to gh
+EXTRA_USER_PAT = _secret("E2E_EXTRA_USER_PAT")  # optional 2nd account, NOT in MorphoCloudUsers
 
 # OpenStack (read-only) — selects the clouds.yaml entry; unset -> OS assertions skip.
 OS_CLOUD = _env("E2E_OS_CLOUD")            # e.g. BIO240357_IU
@@ -120,7 +137,7 @@ OS_CLOUD = _env("E2E_OS_CLOUD")            # e.g. BIO240357_IU
 IMAP_HOST = _env("E2E_IMAP_HOST")
 IMAP_PORT = int(_env("E2E_IMAP_PORT", "993"))
 IMAP_USER = _env("E2E_IMAP_USER")
-IMAP_PASSWORD = _env("E2E_IMAP_PASSWORD")
+IMAP_PASSWORD = _secret("E2E_IMAP_PASSWORD")
 IMAP_MAILBOX = _env("E2E_IMAP_MAILBOX", "INBOX")
 
 BOT_GITHUB_USERNAME = _env("E2E_BOT_USERNAME", "mc-e2e-bot")
@@ -138,9 +155,11 @@ TEST_INSTANCES_DIR = Path(
 SKIP_VENDORIZE = _env("E2E_SKIP_VENDORIZE", "0") == "1"
 VENDORIZE_GIT_AUTHOR_NAME = _env("E2E_GIT_AUTHOR_NAME", "morphocloud-e2e")
 VENDORIZE_GIT_AUTHOR_EMAIL = _env("E2E_GIT_AUTHOR_EMAIL", "no-reply@morphocloud.org")
-# Paths the vendorize commit is allowed to touch (commit-scope guard).
-VENDORIZE_ALLOWED_PREFIXES = (".github/", "scripts/", "cloud-config", "issue-commands.md",
-                              "course-issue-commands.md", "workshop-issue-commands.md")
+# Paths the vendorize commit is allowed to touch (commit-scope guard). Must match the
+# `paths` list in MorphoCloudWorkflow/noxfile.py `vendorize` session.
+VENDORIZE_ALLOWED_PREFIXES = (".github/", "scripts/", "cloud-config", ".pre-commit-config.yaml",
+                              "issue-commands.md", "course-issue-commands.md",
+                              "workshop-issue-commands.md")
 
 # --------------------------------------------------------------------------------------
 # Guardrails / timeouts (seconds).
