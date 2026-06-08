@@ -80,7 +80,7 @@ def test_admin_mention(bot, admin, issues):
 # labels.yml — workflow_dispatch syncs the repo's label definitions.
 # --------------------------------------------------------------------------------------
 
-def test_labels_sync(admin):
+def test_labels_sync(admin, baseline):
     """Dispatch labels.yml and confirm a sample of definitions exist on the repo."""
     since = utcnow()
     admin.dispatch_workflow("labels.yml")
@@ -88,6 +88,8 @@ def test_labels_sync(admin):
                 event="workflow_dispatch")
     for label in ("flavor:g3.large", "expiration:60d", "status:active", "timeout:4hrs"):
         assert admin.repo_label_exists(label), f"labels.yml did not sync {label!r}"
+    # Baseline the full synced label set: inert until captured, then it flags any drift.
+    baseline.check("test_instances_labels", admin.list_repo_labels())
 
 
 # --------------------------------------------------------------------------------------

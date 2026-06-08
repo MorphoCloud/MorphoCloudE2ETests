@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from e2e import config, forms, openstack
+from e2e.baseline import Baseline, BaselineMismatch
 from e2e.gh import poll
 from e2e.mailbox import MailMessage
 from e2e.sweeper import SweepResult, _epoch
@@ -115,6 +116,31 @@ def test_sweepresult_and_epoch():
     )
     assert _epoch(None) is None
     assert _epoch("garbage") is None
+
+
+# -- baseline capture/assert -----------------------------------------------------------
+
+def test_baseline_capture_roundtrip(tmp_path):
+    path = tmp_path / "expected.json"
+    cap = Baseline(path, capture=True)
+    cap.check("labels", ["b", "a", "c"])     # order-independent
+    cap.check("conclusion", "success")
+    cap.save()
+    assert path.exists()
+
+    loaded = Baseline(path, capture=False)
+    # matching (even in a different order) passes; mismatch raises
+    loaded.check("labels", ["c", "b", "a"])
+    loaded.check("conclusion", "success")
+    with pytest.raises(BaselineMismatch):
+        loaded.check("conclusion", "failure")
+
+
+def test_baseline_inert_without_file(tmp_path):
+    # No baseline file + not capturing -> check() is a no-op (records, never asserts).
+    bl = Baseline(tmp_path / "none.json", capture=False)
+    assert bl.check("anything", ["x", "y"]) == ["x", "y"]
+    assert bl.collected["anything"] == ["x", "y"]
 
 
 # -- commit-scope guard (verify_vendorize.sh) ------------------------------------------

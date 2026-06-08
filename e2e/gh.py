@@ -172,6 +172,10 @@ class GitHubClient:
         except GitHubError:
             return False
 
+    def list_repo_labels(self) -> list[str]:
+        return [lbl["name"] for lbl in
+                self._req("GET", f"/repos/{self.repo}/labels?per_page=100").json()]
+
     def ensure_label(self, name: str, *, color: str = "ededed", description: str = "") -> None:
         """Idempotently create a repo label (no-op if it already exists)."""
         if self.repo_label_exists(name):

@@ -49,11 +49,16 @@ In CI: **Actions → E2E → Run workflow** (`.github/workflows/e2e.yml`), pick 
 - ✅ Harness foundation: config, GitHub/OpenStack/IMAP clients, sweeper, Stage 0
   vendorize (+ commit-scope guard + lint), fixtures, workflow entry point.
 - ✅ **Milestone 1** — cheap validation suite (7 tests), runnable once the bot account +
-  PATs exist.
+  PATs exist. (Live `labels.yml` smoke already passes against Test-Instances.)
+- ✅ Offline unit suite (`nox -s units`, 22 tests) — parsers, denylist, `poll`,
+  commit-scope guard, baseline.
+- ✅ `--capture-baseline` mode + `e2e/baseline.py` (record-or-assert; DESIGN.md §8).
+- ✅ In-guest readiness probe **`e2e/assets/e2e-verify-instance.yml`** — deploy to
+  Test-Instances ([e2e/assets/README.md](e2e/assets/README.md)).
 - 🚧 **Milestones 2-4** — individual / workshop / lifecycle scenarios are implemented and
   collected but **gated behind `E2E_PROVISION=1`**; they need:
   - **Milestone 0** done first: confirm the smallest flavor whose cloud-init completes,
     set `E2E_FLAVOR` (see DESIGN.md §4).
-  - `e2e-verify-instance.yml` committed to Test-Instances (in-guest readiness probe).
+  - the readiness probe above deployed to Test-Instances.
 
 See DESIGN.md §11 for the next-actions checklist.

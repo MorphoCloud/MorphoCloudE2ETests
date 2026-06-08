@@ -37,6 +37,13 @@ def pytest_collection_modifyitems(config, items):  # `config` = pytest Config (h
             item.add_marker(skip)
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--capture-baseline", action="store_true", default=False,
+        help="Record observed values into e2e/baseline/expected.json instead of asserting (DESIGN.md §8).",
+    )
+
+
 # --------------------------------------------------------------------------------------
 # Identity clients.
 #
@@ -139,3 +146,14 @@ def issues(bot, admin):
 @pytest.fixture()
 def sweeper(admin, os_client) -> Sweeper:
     return Sweeper(admin, os_client)
+
+
+@pytest.fixture(scope="session")
+def baseline(request):
+    """Capture/assert baseline (DESIGN.md §8). `baseline.check(key, observed)`."""
+    from e2e.baseline import Baseline
+    bl = Baseline(config.BASELINE_PATH, capture=request.config.getoption("--capture-baseline"))
+    yield bl
+    if bl.capture:
+        bl.save()
+        print(f"\n[baseline] wrote {len(bl.collected)} entries to {config.BASELINE_PATH}")

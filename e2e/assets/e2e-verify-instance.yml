@@ -1,0 +1,70 @@
+# TEST-ONLY workflow — deploy to MorphoCloud/Test-Instances (NOT MWF, NOT production).
+# In-guest readiness probe (DESIGN.md §3, layer 3). The harness dispatches this after
+# /create; the run conclusion is the readiness verdict. Runs on the self-hosted runner
+# so it uses the runner's already-authorized SSH key — no extra credential.
+#
+# Lives only in Test-Instances. Confirm `nox -s vendorize` does not prune it; if it does,
+# add it to the noxfile exclude list. See e2e/assets/README.md for deployment.
+name: "[E2E] Verify Instance"
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number whose instance to verify"
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: self-hosted
+    steps:
+      - name: Probe in-guest provisioning invariants
+        env:
+          OS_CLOUD: ${{ vars.MORPHOCLOUD_OS_CLOUD }}
+          PREFIX: ${{ vars.INSTANCE_NAME_PREFIX }}
+          ISSUE_NUMBER: ${{ github.event.inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          source ~/venv/bin/activate
+
+          instance_prefix=${PREFIX:+${PREFIX}_}
+          instance_name="${instance_prefix}instance-${ISSUE_NUMBER}"
+          echo "Verifying instance: $instance_name"
+
+          # Resolve the floating IP (index 1 = floating, as in the lifecycle workflows).
+          instance_ip=$(
+            openstack server show "$instance_name" -c addresses -f json |
+              jq -r '.addresses.auto_allocated_network[1] // empty'
+          )
+          if [[ -z "$instance_ip" || "$instance_ip" == "null" ]]; then
+            echo "::error ::Could not resolve a floating IP for $instance_name"
+            exit 1
+          fi
+          echo "Instance IP: $instance_ip"
+
+          # Independent invariants that "ACTIVE + SSH-able" does NOT guarantee:
+          #   - the data volume is actually MOUNTED in the guest
+          #   - /home/exouser was relocated onto that volume (symlink)
+          #   - Slicer is present on the volume
+          # The remote script exits non-zero with a clear message on the first failure.
+          # Quoted here-doc => the script is sent literally (no local expansion).
+          ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o LogLevel=ERROR \
+            -o ConnectTimeout=15 \
+            exouser@"$instance_ip" \
+            'bash -s' <<'REMOTE'
+          set -e
+          fail() { echo "READINESS FAIL: $1" >&2; exit 1; }
+          mountpoint -q /media/volume/MyData || fail "data volume not mounted at /media/volume/MyData"
+          link=$(readlink /home/exouser || true)
+          [ "$link" = "/media/volume/MyData/home/exouser" ] || fail "/home/exouser not symlinked to the volume (got: ${link:-<none>})"
+          [ -d /media/volume/MyData/Slicer ] || fail "Slicer not present on the volume"
+          echo "READINESS OK"
+          df -h /media/volume/MyData | tail -1
+          REMOTE
