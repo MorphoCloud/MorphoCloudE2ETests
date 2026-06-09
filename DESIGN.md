@@ -1,6 +1,8 @@
 # MorphoCloud End-to-End Test Harness — Design
 
-**Status:** Design / not yet implemented
+**Status:** IMPLEMENTED — Milestones 1–4 all pass live against Test-Instances (2026-06-09);
+merged to `master`, runnable from the Actions UI. This doc is the design rationale + coverage
+audit (§12); the README is the operator guide.
 **Author:** drafted for muratmaga, 2026-06-08
 **Goal:** Autonomously exercise *all* user-facing workflows in `MorphoCloudWorkflow`
 (individual + workshop) against a real (but cheap) JS2 provision, so that breakage

@@ -47,18 +47,28 @@ Make `?action=lookup&github_username=mc-e2e-bot` resolve to the test inbox:
   does, add it to the noxfile exclude list. (Used by Milestone 2/3 readiness asserts.)
 
 ## 7. Environment / secrets
-Local dev: put these in `MorphoCloudE2ETests/.env` (git-ignored). CI: Actions repo secrets.
+
+Local dev: a git-ignored `MorphoCloudE2ETests/.env`. CI: secrets on the
+`MorphoCloud/MorphoCloudE2ETests` repo (set via `gh secret set <NAME> --repo …`).
+
+> **Secret-by-file (local):** any `E2E_*` secret can be given as `<NAME>_FILE=<path>`
+> instead of the value, so `.env` holds only a path (e.g.
+> `E2E_BOT_PAT_FILE=~/.ssh/GH-morphocloud-e2e-token`). Applies to BOT/ADMIN/EXTRA/IMAP.
 
 | Var | What |
 |-----|------|
-| `E2E_BOT_PAT` | `mc-e2e-bot` user PAT — scopes **`repo` + `read:org`** only. Rotate regularly. |
-| `E2E_BOT_USERNAME` | bot handle (default `mc-e2e-bot`). |
-| `E2E_ADMIN_PAT` | admin (morphocloud-admins) PAT for `/approve` + `workflow_dispatch`. Local dev may omit it — the harness falls back to `gh auth token`. |
-| `E2E_IMAP_HOST` / `E2E_IMAP_PORT` / `E2E_IMAP_USER` / `E2E_IMAP_PASSWORD` | inbox IMAP. |
-| `E2E_OS_CLOUD` | clouds.yaml entry (e.g. `BIO240357_IU`). Unset → OS assertions skip. |
-| `E2E_FLAVOR` | smallest flavor whose cloud-init completes (set by Milestone 0; default `m3.tiny`). |
+| `E2E_BOT_PAT` | **Required.** `amm554` **fine-grained** PAT, resource owner `MorphoCloud`, **Test-Instances only**, **Issues: read/write** (+ Metadata: read). A user PAT, NOT a GitHub App token (the issue creator must be the bot, and `on-admin-mention` ignores Bot-type comments). |
+| `E2E_BOT_USERNAME` | bot handle (default `amm554`). |
+| `E2E_ADMIN_PAT` | **Required in CI** (locally it falls back to `gh auth token`). A `muratmaga` (a `morphocloud-admins` member) **classic** PAT with **`repo` + `workflow`** — `workflow` is needed because Stage 0 pushes `.github/workflows/` changes to Test-Instances; also drives `/approve` + `workflow_dispatch`. |
+| `E2E_IMAP_HOST` / `E2E_IMAP_PORT` / `E2E_IMAP_USER` / `E2E_IMAP_PASSWORD` | *(optional)* inbox IMAP → enables the real credential-email asserts. For `amm554` that inbox is `slicermorph@gmail.com` (already in the join lookup). Unset → email asserts skip. |
+| `E2E_OS_CLOUD` + `E2E_OS_CLOUDS_YAML` | *(optional)* clouds.yaml entry (e.g. `BIO240357_IU`) + the read-only clouds.yaml contents (CI writes it to `~/.config/openstack/`). Enables direct OpenStack state asserts. Unset → those skip. |
+| `E2E_FLAVOR` | smallest flavor whose cloud-init completes (Milestone 0; default `m3.tiny`). |
 | `E2E_EXTRA_USER_PAT` | *(optional)* 2nd account NOT in `MorphoCloudUsers`, for the non-member negative. |
-| `E2E_MWF_DIR` / `E2E_TEST_INSTANCES_DIR` | local checkouts for Stage 0 vendorize. |
+| `E2E_MWF_DIR` / `E2E_TEST_INSTANCES_DIR` | *(local only)* checkouts for Stage 0 vendorize. CI checks them out and sets these automatically. |
+
+**CI (GitHub Actions):** `.github/workflows/e2e.yml` is `workflow_dispatch` (Actions → E2E
+→ Run workflow → pick a `suite`). It needs `E2E_BOT_PAT` + `E2E_ADMIN_PAT`; IMAP/OS
+secrets are optional. Results render in the run's job-summary report.
 
 ## 8. Smoke check the plumbing
 ```bash
