@@ -10,7 +10,7 @@ on:
         description: "Which suite to run"
         type: choice
         default: cheap
-        options: [cheap, individual, workshop, lifecycle, all]
+        options: [cheap, individual, individual-lifecycle, workshop, workshop-lifecycle, all]
       mwf_ref:
         description: "MorphoCloudWorkflow ref to vendorize from"
         type: string
@@ -93,11 +93,12 @@ jobs:
           fi
 
           case "$SUITE" in
-            cheap)      MARK="cheap" ;;
-            individual) MARK="individual"; export E2E_PROVISION=1 ;;
-            workshop)   MARK="workshop";   export E2E_PROVISION=1 ;;
-            lifecycle)  MARK="lifecycle";  export E2E_PROVISION=1 ;;
-            all)        MARK="";           export E2E_PROVISION=1 ;;
+            cheap)                MARK="cheap" ;;
+            individual)           MARK="individual";           export E2E_PROVISION=1 ;;
+            individual-lifecycle) MARK="individual_lifecycle"; export E2E_PROVISION=1 ;;
+            workshop)             MARK="workshop";             export E2E_PROVISION=1 ;;
+            workshop-lifecycle)   MARK="workshop_lifecycle";   export E2E_PROVISION=1 ;;
+            all)                  MARK="";                     export E2E_PROVISION=1 ;;
           esac
 
           if [ -n "$MARK" ]; then

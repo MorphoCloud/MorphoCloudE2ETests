@@ -16,9 +16,10 @@ testpaths = ["e2e/scenarios"]
 addopts = "-ra"
 markers = [
     "cheap: no provisioning, C=0 (Milestone 1)",
-    "individual: individual instance lifecycle, C=1 (Milestone 2)",
-    "workshop: workshop lifecycle, C=2 (Milestone 3)",
-    "lifecycle: expiry/renewal/cleanup via label-injection + dispatch (Milestone 4)",
+    "individual: individual instance provision lifecycle, C=1 (Milestone 2)",
+    "workshop: workshop provision + fan-out + credential delivery, C=2 (Milestone 3)",
+    "individual_lifecycle: time-gated individual automation — renew/auto-delete/shelve/volume (Milestone 4)",
+    "workshop_lifecycle: workshop teardown via the auto-delete cron — cascade close (Milestone 4)",
     "provision: marks a test that creates a real (cheap) OpenStack instance",
 ]
 

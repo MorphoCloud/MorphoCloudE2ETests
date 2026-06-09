@@ -68,23 +68,27 @@ The fast safety net: every check that doesn't need a VM.
 - *(if IMAP)* the organizer credential email contains a markdown table with **one row per
   instance**.
 
-### `lifecycle` — time-gated automation, forced with short-expiry labels (~70 min)
-Real cleanup/renewal pathways are normally days/weeks out; the harness injects
-short-expiry labels (the cleanup analog of `m3.tiny`) so they fire immediately. The cron
-derives an instance's age from its issue's `created_at`, so `expiration:0d` is "already
-past" (deletes now) while a longer rung stays in the future.
-- **individual instance lifecycle management** *(one instance, full story)*: provision →
-  set the policy `[expiration:0d, expiration:1d]` and `/renew` (climbs to the `1d` rung)
-  → an `automatic-instance-deleting` pass **spares** it (renew bought a day) → collapse
-  the policy back to `expiration:0d` → the next pass **deletes** the instance **and**
-  volume, sets `status:deleted`, **posts the expiration notice**, and closes the issue.
+The two `*-lifecycle` suites exercise the **time-gated automation** (cleanup/renewal),
+normally days/weeks out, forced immediately with short-expiry labels (the cleanup analog
+of `m3.tiny`). The cron derives an instance's age from its issue's `created_at`, so
+`expiration:0d` is "already past" (deletes now) while a longer rung stays in the future.
+
+### `individual-lifecycle` — the renewable per-instance automation (~60 min)
+- **lifecycle management** *(one instance, full story)*: provision → set the policy
+  `[expiration:0d, expiration:1d]` and `/renew` (climbs to the `1d` rung) → an
+  `automatic-instance-deleting` pass **spares** it (renew bought a day) → collapse the
+  policy back to `expiration:0d` → the next pass **deletes** the instance **and** volume,
+  sets `status:deleted`, **posts the expiration notice**, and closes the issue.
 - **auto-shelve:** inject `timeout:0hrs` → `automatic-instance-shelving` shelves it.
 - **auto-volume-delete:** detach the instance, mark `volume:expiration-pending`, dispatch
   with `graceperiod=0` → `automatic-volume-deleting` deletes the volume.
-- **workshop cron cleanup** *(opt-in via `E2E_WORKSHOP_PARENT`)*: inject `expiration:0d` on
-  each sub-issue → a single `automatic-instance-deleting` pass deletes every
-  instance+volume and closes all sub-issues **and** the parent. The harness only triggers
-  and asserts — it never comments on sub-issues.
+
+### `workshop-lifecycle` — the workshop teardown the cron does (~45 min)
+- stands up its own 2-instance workshop, then injects `expiration:0d` on **each**
+  sub-issue → a single `automatic-instance-deleting` pass deletes **every**
+  instance+volume, closes **all** sub-issues, **and** closes the parent. The harness only
+  triggers and asserts — it never comments on sub-issues. (Set `E2E_WORKSHOP_PARENT` to
+  reuse a live workshop and skip the build.)
 
 > **Not covered:** the renewal *warning* email — it only fires for an instance aged into
 > the 7-day window of an expiration > 7 days, which label injection on a fresh instance
@@ -119,8 +123,9 @@ table in [e2e/docs/setup_bot.md](e2e/docs/setup_bot.md).
 |-------|--------------|-----------|-------|
 | `cheap` | validation & gating (7 checks above) | none | 2–3 min |
 | `individual` | full single-user lifecycle: create→readiness→shelve→…→delete | 1× `m3.tiny` | ~20 min |
+| `individual-lifecycle` | renew-protects, auto-shelve, auto-volume-delete | 1× `m3.tiny` each | ~60 min |
 | `workshop` | organizer fan-out: approve→create→backfill→credential delivery | 2× `m3.tiny` | ~40 min |
-| `lifecycle` | renew-protects, auto-shelve, auto-delete, auto-volume-delete | 1× `m3.tiny` each | ~70 min |
+| `workshop-lifecycle` | builds a workshop, then the cron cascade-deletes + closes the parent | 2× `m3.tiny` | ~45 min |
 | `all` | every suite | up to 2× `m3.tiny` | ~2 h |
 | `sweep_only` (toggle) | just force-clean `[E2E]` leftovers | none | 1 min |
 
@@ -135,12 +140,16 @@ optional and deepen the asserts (credential-email + direct OpenStack-state check
 pip install -e .
 nox -s units                          # offline unit tests (no network/secrets)
 nox -s e2e-cheap                       # the cheap suite (needs bot + admin tokens)
-E2E_PROVISION=1 pytest -m individual   # or: workshop / lifecycle (real m3.tiny)
-nox -s e2e-sweep                       # force-clean [E2E] leftovers (idempotent)
+E2E_PROVISION=1 pytest -m individual            # real m3.tiny — full user lifecycle
+E2E_PROVISION=1 pytest -m individual_lifecycle  # renew / auto-shelve / auto-volume-delete
+E2E_PROVISION=1 pytest -m workshop              # workshop fan-out + credential delivery
+E2E_PROVISION=1 pytest -m workshop_lifecycle    # workshop cron teardown (cascade close)
+nox -s e2e-sweep                                # force-clean [E2E] leftovers (idempotent)
 ```
 
-> The pytest **marker** for the validation suite is literally `cheap` (`pytest -m cheap`);
-> the table above describes what that suite contains.
+> The dropdown values use hyphens (`individual-lifecycle`); the pytest **markers** use the
+> underscored form (`pytest -m individual_lifecycle`). The `cheap` suite is the validation
+> marker (`pytest -m cheap`).
 
 ## Status — all milestones green ✅
 
@@ -148,7 +157,8 @@ Validated **live** against Test-Instances on `m3.tiny`:
 
 - **Milestone 0** — `m3.tiny` cloud-init completes ✅
 - **M1** `cheap` validation ✅ · **M2** `individual` lifecycle ✅ · **M3** `workshop` ✅ ·
-  **M4** `lifecycle` (individual lifecycle management, auto-shelve, volume-delete) ✅
+  **M4** `individual-lifecycle` (renew, auto-shelve, auto-volume-delete) +
+  `workshop-lifecycle` (cron cascade teardown) ✅
 - Offline unit suite (`nox -s units`) ✅ · `--capture-baseline` mode ✅ · in-guest
   readiness probe (`e2e/assets/e2e-verify-instance.yml`, deployed to Test-Instances) ✅
 

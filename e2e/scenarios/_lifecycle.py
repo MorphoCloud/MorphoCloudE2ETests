@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from e2e import config, openstack
+from e2e import config, forms, openstack
 from e2e.gh import GitHubClient, poll, utcnow
 
 
@@ -86,3 +86,51 @@ def assert_status_label(admin: GitHubClient, issue: int, *statuses: str,
     wanted = {f"status:{s}" for s in statuses}
     poll(lambda: bool(wanted & set(admin.labels(issue))),
          timeout=timeout, desc=f"status in {sorted(statuses)} on #{issue}")
+
+
+# --------------------------------------------------------------------------------------
+# Workshop provisioning — shared by the workshop build scenario (test_workshop.py) and
+# the workshop teardown scenario (test_lifecycle.py) so there is ONE definition of how a
+# workshop is stood up. Split in two so the build scenario can interleave its extra
+# /unapprove + approval-email assertions between the two halves.
+# --------------------------------------------------------------------------------------
+
+def open_and_approve_workshop(bot: GitHubClient, admin: GitHubClient, issues, *,
+                              flavor: str = config.E2E_FLAVOR, target: int = 2) -> int:
+    """Open a valid workshop request (future start so the create-window is already open),
+    wait for schedule validation, then admin `/approve`. Returns the parent issue number."""
+    parent = issues.open(
+        "workshop", "workshop lifecycle",
+        forms.workshop_body(flavor=flavor, duration_days=1, number_of_instances=target),
+    )
+    admin.wait_for_label(parent, lambda lbl: lbl.startswith("start:"),
+                         timeout=config.TIMEOUT_WORKFLOW_RUN)
+    assert "needs-fix" not in admin.labels(parent)
+    command(admin, admin, parent, "/approve", "approve-workshop.yml")
+    assert "request:approved" in admin.labels(parent)
+    return parent
+
+
+def create_and_build_workshop(bot: GitHubClient, admin: GitHubClient, issues, parent: int,
+                              *, target: int = 2, build_timeout: int = 3600) -> list[int]:
+    """Organizer `/create` → N sub-issues fan out → backfill → every sub-issue reaches
+    `status:active`. Sub-issues are registered with the issues fixture and tagged so
+    teardown + the sweeper force-clean them (no leak). Returns the sub-issue numbers."""
+    bot.comment(parent, "/create")
+
+    def enough_subs():
+        subs = admin.sub_issues(parent)
+        return subs if len(subs) >= target else None
+
+    sub_issues = poll(enough_subs, timeout=config.TIMEOUT_CREATE,
+                      desc=f"{target} workshop sub-issues")
+    sub_nums = [s["number"] for s in sub_issues]
+    for n in sub_nums:
+        issues.opened.append(n)              # teardown force-cleans these
+        admin.add_labels(n, [config.E2E_LABEL])  # tag so the standalone sweeper sees them too
+
+    admin.dispatch_workflow("workshop-backfill.yml")
+    # 2 m3.tiny instances build serially on the single runner.
+    for n in sub_nums:
+        assert_status_label(admin, n, "active", timeout=build_timeout)
+    return sub_nums

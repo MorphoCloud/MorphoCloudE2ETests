@@ -1,13 +1,16 @@
-"""Milestone 4 — lifecycle, expiry, renewal & cleanup (label-injection + dispatch).
+"""Milestone 4 — time-gated lifecycle automation (label-injection + dispatch).
 
-Forces the time-gated pathways with short-expiry test labels (the cleanup analog of
-m3.tiny) so nothing waits real time. The destructive members double as teardown.
+Forces the cleanup/renewal pathways with short-expiry test labels (the cleanup analog of
+m3.tiny) so nothing waits real time. Two suites live here, mirroring the two documented
+scenarios so they map 1:1 to the Actions `suite` dropdown:
 
-Gated behind `provision`. See DESIGN.md §2 + §6.4.
+  - `individual-lifecycle` (marker `individual_lifecycle`): the renewable per-instance
+    automation — lifecycle management (renew ↔ auto-delete), auto-shelve, auto-volume-delete.
+  - `workshop-lifecycle`   (marker `workshop_lifecycle`): the workshop teardown the cron
+    does — cascade-delete every sub-instance + close the parent.
 
-Status: scaffold — the label-injection + dispatch + assertion structure is wired for
-each pathway. Run only after M2/M3 are green and `e2e-verify-instance.yml` exists.
-Each test provisions its own instance(s) via the helpers in _lifecycle.
+Every test provisions its own instance(s) via the helpers in _lifecycle, so each is
+self-contained. Gated behind `provision`. See DESIGN.md §2 + §6.4.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from e2e import config, forms, openstack
 from e2e.gh import poll, utcnow
 from . import _lifecycle as lc
 
-pytestmark = [pytest.mark.lifecycle, pytest.mark.provision]
+pytestmark = pytest.mark.provision
 
 
 def _provision_individual(bot, admin, os_client, issues) -> int:
@@ -30,6 +33,7 @@ def _provision_individual(bot, admin, os_client, issues) -> int:
     return num
 
 
+@pytest.mark.individual_lifecycle
 def test_individual_lifecycle_management(bot, admin, os_client, ensure_test_labels, issues):
     """Full individual-instance lifecycle management, end to end, no real waiting.
 
@@ -101,6 +105,7 @@ def test_individual_lifecycle_management(bot, admin, os_client, ensure_test_labe
          desc=f"#{num} closed by the auto-delete cron")
 
 
+@pytest.mark.individual_lifecycle
 def test_auto_shelve(bot, admin, os_client, ensure_test_labels, issues):
     """timeout:0hrs → automatic-instance-shelving shelves the running instance."""
     num = _provision_individual(bot, admin, os_client, issues)
@@ -116,6 +121,7 @@ def test_auto_shelve(bot, admin, os_client, ensure_test_labels, issues):
     # teardown for this instance happens via the sweeper / a follow-up /delete_all
 
 
+@pytest.mark.individual_lifecycle
 def test_auto_volume_delete(bot, admin, os_client, ensure_test_labels, issues):
     """volume:expiration-pending + graceperiod=0 → automatic-volume-deleting deletes it."""
     num = _provision_individual(bot, admin, os_client, issues)
@@ -136,24 +142,30 @@ def test_auto_volume_delete(bot, admin, os_client, ensure_test_labels, issues):
              desc="volume deleted")
 
 
-def test_workshop_cron_cleanup(admin, os_client, ensure_test_labels):
-    """The real workshop teardown: inject expiration:0d on each sub-issue, dispatch
-    automatic-instance-deleting once → it deletes all instances+volumes, closes all
-    sub-issues, and closes the parent. We TRIGGER + assert; we never comment on subs.
+@pytest.mark.workshop_lifecycle
+def test_workshop_lifecycle_cleanup(bot, admin, os_client, ensure_test_labels, issues):
+    """The workshop teardown the cron performs: inject expiration:0d on each sub-issue,
+    dispatch automatic-instance-deleting once → it deletes every instance+volume, closes
+    every sub-issue, and closes the parent. We TRIGGER + assert; we never comment on subs.
 
-    Precondition: a live workshop (run test_workshop_lifecycle first, or pass the parent
-    via E2E_WORKSHOP_PARENT). Skipped if no live workshop is available.
+    Self-contained: stands up its own 2-instance workshop (the shared helpers), unless
+    E2E_WORKSHOP_PARENT points at an existing live workshop parent — then it reuses that
+    and skips the build (useful for chaining after the `workshop` suite).
     """
     import os
     parent_env = os.environ.get("E2E_WORKSHOP_PARENT")
-    if not parent_env:
-        pytest.skip("set E2E_WORKSHOP_PARENT to a live workshop parent issue number")
-    parent = int(parent_env)
+    if parent_env:
+        parent = int(parent_env)
+        subs = admin.sub_issues(parent)
+        assert subs, f"workshop #{parent} has no sub-issues"
+        sub_nums = [s["number"] for s in subs]
+    else:
+        flavor = config.assert_flavor_allowed(config.E2E_FLAVOR)
+        parent = lc.open_and_approve_workshop(bot, admin, issues, flavor=flavor, target=2)
+        sub_nums = lc.create_and_build_workshop(bot, admin, issues, parent, target=2)
 
-    subs = admin.sub_issues(parent)
-    assert subs, f"workshop #{parent} has no sub-issues"
-    for s in subs:
-        admin.set_expiration_labels(s["number"], [config.TEST_LABEL_EXPIRE_NOW])
+    for n in sub_nums:
+        admin.set_expiration_labels(n, [config.TEST_LABEL_EXPIRE_NOW])
 
     since = utcnow()
     admin.dispatch_workflow("automatic-instance-deleting.yml")
@@ -161,8 +173,7 @@ def test_workshop_cron_cleanup(admin, os_client, ensure_test_labels):
                        timeout=config.TIMEOUT_CREATE, event="workflow_dispatch")
 
     # every sub-issue closed, every resource gone, parent closed
-    for s in subs:
-        n = s["number"]
+    for n in sub_nums:
         poll(lambda n=n: admin.issue_state(n) == "closed",
              timeout=config.TIMEOUT_CREATE, desc=f"sub-issue #{n} closed")
         if os_client.available():
