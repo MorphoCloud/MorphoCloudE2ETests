@@ -66,8 +66,15 @@ def test_individual_lifecycle_management(bot, admin, os_client, ensure_test_labe
     # renewed:0 selects expiration:0d (already past -> would delete); after /renew,
     # renewed:1 selects expiration:1d (created_at + 1d -> future -> survives).
     admin.set_expiration_labels(num, ["expiration:0d", "expiration:1d"])
+    since_renew = utcnow()
     lc.command(bot, admin, num, "/renew", "update-renew-label.yml")
     assert any(lbl.startswith("renewed:") for lbl in admin.labels(num)), "renew did not set renewed:N"
+    # Goal #2 (user-facing message): a successful /renew must CONFIRM to the user, not just
+    # react. Two rungs here ([0d,1d]) → exactly one renewal allowed → the "no more renewals
+    # left, final expiration <date>" wording. Assert the acknowledgement comment is posted.
+    ack = admin.wait_for_comment(num, "Renewal applied", since=since_renew)
+    assert "expiration" in ack["body"].lower(), \
+        f"renew confirmation must state the new expiration date: {ack['body']!r}"
 
     since = utcnow()
     admin.dispatch_workflow("automatic-instance-deleting.yml")
