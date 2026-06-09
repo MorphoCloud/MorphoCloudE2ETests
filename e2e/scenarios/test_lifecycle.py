@@ -30,32 +30,36 @@ def _provision_individual(bot, admin, os_client, issues) -> int:
     return num
 
 
-def test_renew_protects_from_autodelete(bot, admin, os_client, inbox, ensure_test_labels, issues):
-    """expiration:1d → warning email; /renew → renewed:1, pushed out, NOT deleted."""
+def test_renew_protects_from_autodelete(bot, admin, os_client, ensure_test_labels, issues):
+    """/renew bumps renewed:N → the instance uses the *next* (longer) expiration and
+    survives an auto-delete pass it would otherwise be caught by.
+
+    NOTE: the renewal *warning* email/notice is NOT exercised here. It only fires for an
+    instance aged into the 7-day window with expiration > 7d, which label injection on a
+    fresh instance can't simulate (and expiration <= 7d is treated as a workshop and
+    skipped — automatic-instance-deleting.yml). This tests the renew mechanic itself.
+    """
     num = _provision_individual(bot, admin, os_client, issues)
     admin.ensure_label("expiration:2d", color="892368", description="expires in 2 days")
-    admin.set_expiration_labels(num, ["expiration:1d", "expiration:2d"])
+    # renewed:0 selects expiration:0d (already past -> would delete); after /renew,
+    # renewed:1 selects expiration:2d (future -> survives).
+    admin.set_expiration_labels(num, ["expiration:0d", "expiration:2d"])
+
+    lc.command(bot, admin, num, "/renew", "update-renew-label.yml")
+    assert any(lbl.startswith("renewed:") for lbl in admin.labels(num)), "renew did not set renewed:N"
 
     since = utcnow()
     admin.dispatch_workflow("automatic-instance-deleting.yml")
     run = admin.wait_for_run("automatic-instance-deleting.yml", since=since,
                              timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
     assert run and run.get("conclusion") == "success"
-    # warning email + renewal-notice label, instance NOT deleted
-    inbox.wait_for(lambda m: "expire" in (m.subject + m.text).lower(), since=since)
-    assert any(lbl.startswith("renewal-notice:") for lbl in admin.labels(num))
+    # Deletion deletes the volume INLINE (sets volume:deleted) before the run concludes,
+    # so if renew had failed to protect, #num would carry volume:deleted now. It must not.
+    labels_after = admin.labels(num)
+    assert "volume:deleted" not in labels_after and "status:deleted" not in labels_after, \
+        "renew did not protect the instance from auto-delete"
     if os_client.available():
         assert os_client.server_exists(openstack.instance_name(num))
-
-    # /renew pushes it out and clears the notice; re-run → still not deleted
-    lc.command(bot, admin, num, "/renew", "update-renew-label.yml")
-    assert any(lbl.startswith("renewed:") for lbl in admin.labels(num))
-    since = utcnow()
-    admin.dispatch_workflow("automatic-instance-deleting.yml")
-    admin.wait_for_run("automatic-instance-deleting.yml", since=since,
-                       timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
-    if os_client.available():
-        assert os_client.server_exists(openstack.instance_name(num)), "renew must prevent deletion"
 
 
 def test_auto_shelve(bot, admin, os_client, ensure_test_labels, issues):
@@ -79,8 +83,12 @@ def test_auto_delete(bot, admin, os_client, ensure_test_labels, issues):
     admin.set_expiration_labels(num, [config.TEST_LABEL_EXPIRE_NOW])
     since = utcnow()
     admin.dispatch_workflow("automatic-instance-deleting.yml")
-    admin.wait_for_run("automatic-instance-deleting.yml", since=since,
-                       timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
+    run = admin.wait_for_run("automatic-instance-deleting.yml", since=since,
+                             timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
+    assert run and run.get("conclusion") == "success"
+    # the cron deletes the volume inline + dispatches the instance delete; confirm gone
+    poll(lambda: "status:deleted" in admin.labels(num), timeout=config.TIMEOUT_COMMAND,
+         desc=f"status:deleted on #{num}")
     if os_client.available():
         poll(lambda: os_client.instance_gone(num) and os_client.volume_gone(num),
              timeout=config.TIMEOUT_COMMAND, desc="instance+volume deleted")
@@ -96,8 +104,11 @@ def test_auto_volume_delete(bot, admin, os_client, ensure_test_labels, issues):
     since = utcnow()
     admin.dispatch_workflow("automatic-volume-deleting.yml",
                             inputs={"expiration_graceperiod_days": "0"})
-    admin.wait_for_run("automatic-volume-deleting.yml", since=since,
-                       timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
+    run = admin.wait_for_run("automatic-volume-deleting.yml", since=since,
+                             timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
+    assert run and run.get("conclusion") == "success"
+    poll(lambda: "volume:deleted" in admin.labels(num), timeout=config.TIMEOUT_COMMAND,
+         desc=f"volume:deleted on #{num}")
     if os_client.available():
         poll(lambda: os_client.volume_gone(num), timeout=config.TIMEOUT_COMMAND,
              desc="volume deleted")
