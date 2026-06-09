@@ -25,18 +25,34 @@ def ensure_flavor_label(admin: GitHubClient, issue: int, flavor: str = config.E2
         admin.add_labels(issue, [label])
 
 
-def create(bot: GitHubClient, admin: GitHubClient, issue: int) -> datetime:
+def create(bot: GitHubClient, admin: GitHubClient, issue: int,
+           attempts: int = 3) -> datetime:
     """Post /create and wait for create-instance.yml to conclude success. Returns the
-    timestamp just before /create (for email polling)."""
-    since = utcnow()
-    bot.comment(issue, "/create")
-    run = admin.wait_for_run("create-instance.yml", since=since,
-                             timeout=config.TIMEOUT_CREATE, event="issue_comment")
-    assert run is not None, "create-instance.yml never ran for /create"
-    assert run.get("conclusion") == "success", (
-        f"/create concluded {run.get('conclusion')!r} ({run.get('html_url')})"
+    timestamp just before the successful /create (for email polling).
+
+    create-instance.yml only runs when the issue carries `request-type:instance` at the
+    instant the comment event fires. The label is set at issue creation, but GitHub's
+    issue_comment event payload occasionally lags (a stale label snapshot from a replica),
+    so the run concludes 'skipped' instead of 'success'. That's a harness/event race, not
+    a product failure — re-post /create when it happens. A genuine create-instance failure
+    (any conclusion other than 'skipped') is surfaced immediately, never retried."""
+    conclusion = url = None
+    for attempt in range(1, attempts + 1):
+        since = utcnow()
+        bot.comment(issue, "/create")
+        run = admin.wait_for_run("create-instance.yml", since=since,
+                                 timeout=config.TIMEOUT_CREATE, event="issue_comment")
+        assert run is not None, "create-instance.yml never ran for /create"
+        conclusion, url = run.get("conclusion"), run.get("html_url")
+        if conclusion == "success":
+            return since
+        if conclusion != "skipped":
+            break  # a real create-instance failure — don't mask it behind retries
+        # 'skipped' == the request-type:instance label race; wait_for_run already burned
+        # time (so the replica has settled), then re-post /create.
+    raise AssertionError(
+        f"/create concluded {conclusion!r} after {attempt} attempt(s) ({url})"
     )
-    return since
 
 
 def assert_ready(admin: GitHubClient, os_client: openstack.OpenStackClient, issue: int) -> None:
