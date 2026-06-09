@@ -70,13 +70,15 @@ The fast safety net: every check that doesn't need a VM.
 
 ### `lifecycle` — time-gated automation, forced with short-expiry labels (~70 min)
 Real cleanup/renewal pathways are normally days/weeks out; the harness injects
-short-expiry labels (the cleanup analog of `m3.tiny`) so they fire immediately.
-- **`/renew` protects from auto-delete:** inject `expiration:0d` + `expiration:2d`; `/renew`
-  bumps `renewed:N` so the *next, longer* expiration is used → an
-  `automatic-instance-deleting` pass does **not** delete the instance.
+short-expiry labels (the cleanup analog of `m3.tiny`) so they fire immediately. The cron
+derives an instance's age from its issue's `created_at`, so `expiration:0d` is "already
+past" (deletes now) while a longer rung stays in the future.
+- **individual instance lifecycle management** *(one instance, full story)*: provision →
+  set the policy `[expiration:0d, expiration:1d]` and `/renew` (climbs to the `1d` rung)
+  → an `automatic-instance-deleting` pass **spares** it (renew bought a day) → collapse
+  the policy back to `expiration:0d` → the next pass **deletes** the instance **and**
+  volume, sets `status:deleted`, **posts the expiration notice**, and closes the issue.
 - **auto-shelve:** inject `timeout:0hrs` → `automatic-instance-shelving` shelves it.
-- **auto-delete:** inject `expiration:0d` → `automatic-instance-deleting` deletes instance
-  **and** volume (`status:deleted`).
 - **auto-volume-delete:** detach the instance, mark `volume:expiration-pending`, dispatch
   with `graceperiod=0` → `automatic-volume-deleting` deletes the volume.
 - **workshop cron cleanup** *(opt-in via `E2E_WORKSHOP_PARENT`)*: inject `expiration:0d` on
@@ -146,7 +148,7 @@ Validated **live** against Test-Instances on `m3.tiny`:
 
 - **Milestone 0** — `m3.tiny` cloud-init completes ✅
 - **M1** `cheap` validation ✅ · **M2** `individual` lifecycle ✅ · **M3** `workshop` ✅ ·
-  **M4** `lifecycle` (renew-protects, auto-shelve/delete, volume-delete) ✅
+  **M4** `lifecycle` (individual lifecycle management, auto-shelve, volume-delete) ✅
 - Offline unit suite (`nox -s units`) ✅ · `--capture-baseline` mode ✅ · in-guest
   readiness probe (`e2e/assets/e2e-verify-instance.yml`, deployed to Test-Instances) ✅
 
