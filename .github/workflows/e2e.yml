@@ -101,10 +101,51 @@ jobs:
           esac
 
           if [ -n "$MARK" ]; then
-            pytest -m "$MARK" --junitxml=report.xml
+            pytest -m "$MARK" -v -ra --junitxml=report.xml
           else
-            pytest --junitxml=report.xml
+            pytest -v -ra --junitxml=report.xml
           fi
+
+      - name: Test report (job summary)
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import os, xml.etree.ElementTree as ET
+          out = os.environ["GITHUB_STEP_SUMMARY"]
+          try:
+              root = ET.parse("report.xml").getroot()
+          except Exception as e:
+              with open(out, "a") as f:
+                  f.write(f"## E2E report\n\nNo report.xml (suite did not run to pytest — likely Stage 0 vendorize failed). {e}\n")
+              raise SystemExit(0)
+          suites = root.findall(".//testsuite") or [root]
+          rows, fails = [], []
+          p = fl = sk = 0
+          for ts in suites:
+              for tc in ts.findall("testcase"):
+                  name = tc.get("name"); t = float(tc.get("time") or 0)
+                  fe = tc.find("failure"); er = tc.find("error"); sk_el = tc.find("skipped")
+                  if fe is not None or er is not None:
+                      fl += 1; res = "❌ fail"
+                      el = fe if fe is not None else er
+                      fails.append((name, (el.get("message") or el.text or "")[:1500]))
+                  elif sk_el is not None:
+                      sk += 1; res = "⏭️ skip"
+                  else:
+                      p += 1; res = "✅ pass"
+                  rows.append(f"| `{name}` | {res} | {t:.0f}s |")
+          lines = [f"## E2E report — suite `{os.environ.get('SUITE','?')}`", "",
+                   f"**{p} passed · {fl} failed · {sk} skipped**", "",
+                   "| Test | Result | Time |", "|---|---|---|", *rows]
+          if fails:
+              lines += ["", "### Failures", ""]
+              for n, m in fails:
+                  lines += [f"<details><summary><code>{n}</code></summary>", "", "```", m, "```", "</details>", ""]
+          with open(out, "a") as f:
+              f.write("\n".join(lines) + "\n")
+          PY
+        env:
+          SUITE: ${{ github.event.inputs.suite }}
 
       - name: Sweep leftovers (always)
         if: ${{ always() && github.event.inputs.sweep_only != 'true' }}
