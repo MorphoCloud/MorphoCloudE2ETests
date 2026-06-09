@@ -44,6 +44,10 @@ jobs:
           repository: MorphoCloud/MorphoCloudWorkflow
           ref: ${{ github.event.inputs.mwf_ref }}
           path: _mwf
+          # Full history: Stage 0 vendorize builds its commit message with
+          # `git shortlog <last-vendored-sha>..HEAD` in this source repo, so a shallow
+          # clone breaks the moment there's a real MWF delta to vendorize.
+          fetch-depth: 0
           token: ${{ secrets.E2E_ADMIN_PAT }}
 
       - name: Checkout Test-Instances (vendorize target + push)
