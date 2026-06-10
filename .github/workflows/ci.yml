@@ -1,0 +1,28 @@
+name: CI
+
+# Self-CI for the harness itself (offline — no secrets, no live calls):
+# a regression here would otherwise produce false greens/reds against MWF.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  units:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip nox
+      - run: nox -s units
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1

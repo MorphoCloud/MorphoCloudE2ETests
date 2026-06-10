@@ -61,6 +61,56 @@ def test_individual_lifecycle_management(bot, admin, os_client, ensure_test_labe
     num = _provision_individual(bot, admin, os_client, issues)
     name = openstack.instance_name(num)
 
+    # --- Act 1.5: the renewal-warning + final-expiration EMAILS ------------------------
+    # The warning window is days_until_expiration <= 7 with an active rung > 7
+    # (rungs <= 7 are treated as workshops and skipped). A fresh instance on a
+    # fractional 7.2-day rung computes "7 days left" — legitimately inside the
+    # window with no real waiting. The email flavor is keyed on whether a higher
+    # rung remains: [7.2, 30] -> renewal offer; [7.2] alone -> final notice.
+    admin.ensure_label("expiration:7.2", color="892368", description="E2E: fractional warning rung")
+    admin.ensure_label("expiration:30", color="892368", description="E2E: renewal headroom rung")
+    admin.set_expiration_labels(num, ["expiration:7.2", "expiration:30"])
+    since = utcnow()
+    admin.dispatch_workflow("automatic-instance-deleting.yml")
+    run = admin.wait_for_run("automatic-instance-deleting.yml", since=since,
+                             timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
+    assert run and run.get("conclusion") == "success"
+    warn = admin.wait_for_comment(num, "will be deleted in", since=since)
+    assert "`/renew` to extend" in warn["body"], \
+        f"warning must offer /renew while a higher rung remains: {warn['body']!r}"
+    admin.wait_for_comment(num, "Successfully sent renewal email", since=since)
+    assert "renewal-notice:first" in admin.labels(num), "warning must be label-gated"
+
+    # anti-spam: a second pass must neither re-warn nor re-email
+    n_before = len(admin.list_comments(num))
+    since = utcnow()
+    admin.dispatch_workflow("automatic-instance-deleting.yml")
+    run = admin.wait_for_run("automatic-instance-deleting.yml", since=since,
+                             timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
+    assert run and run.get("conclusion") == "success"
+    assert len(admin.list_comments(num)) == n_before, \
+        "second pass inside the window must be gated by renewal-notice:first"
+
+    # final flavor: collapse to a single rung -> no renewal available
+    for lbl in admin.labels(num):
+        if lbl.startswith("renewal-notice:"):
+            admin.remove_label(num, lbl)
+    admin.set_expiration_labels(num, ["expiration:7.2"])
+    since = utcnow()
+    admin.dispatch_workflow("automatic-instance-deleting.yml")
+    run = admin.wait_for_run("automatic-instance-deleting.yml", since=since,
+                             timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
+    assert run and run.get("conclusion") == "success"
+    warn = admin.wait_for_comment(num, "will be deleted in", since=since)
+    assert "No renewals remain" in warn["body"], \
+        f"warning must NOT offer /renew when no rung remains: {warn['body']!r}"
+    admin.wait_for_comment(num, "Successfully sent final expiration email", since=since)
+
+    # reset the notice gate so the acts below start clean
+    for lbl in admin.labels(num):
+        if lbl.startswith("renewal-notice:"):
+            admin.remove_label(num, lbl)
+
     # --- Act 2: /renew protects (renew = climb to the next rung of the ladder) ---------
     admin.ensure_label("expiration:1d", color="892368", description="expires in 1 day")
     # renewed:0 selects expiration:0d (already past -> would delete); after /renew,

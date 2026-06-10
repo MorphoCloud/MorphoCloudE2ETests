@@ -73,12 +73,18 @@ normally days/weeks out, forced immediately with short-expiry labels (the cleanu
 of `m3.tiny`). The cron derives an instance's age from its issue's `created_at`, so
 `expiration:0d` is "already past" (deletes now) while a longer rung stays in the future.
 
-### `individual-lifecycle` — the renewable per-instance automation (~60 min)
-- **lifecycle management** *(one instance, full story)*: provision → set the policy
-  `[expiration:0d, expiration:1d]` and `/renew` (climbs to the `1d` rung) → an
-  `automatic-instance-deleting` pass **spares** it (renew bought a day) → collapse the
-  policy back to `expiration:0d` → the next pass **deletes** the instance **and** volume,
-  sets `status:deleted`, **posts the expiration notice**, and closes the issue.
+### `individual-lifecycle` — the renewable per-instance automation (~65 min)
+- **lifecycle management** *(one instance, full story)*: provision → **the renewal
+  emails**: a fractional `[expiration:7.2, expiration:30]` ladder puts the fresh
+  instance legitimately inside the ≤7-day warning window (rung > 7, so not
+  workshop-skipped) → the cron posts the ⚠️ warning **offering `/renew`** and sends the
+  **renewal email**; a second pass is **gated** (no re-warn/re-email); collapsing to a
+  single `[expiration:7.2]` rung yields the **final-expiration email** ("No renewals
+  remain") → then set the policy `[expiration:0d, expiration:1d]` and `/renew` (climbs
+  to the `1d` rung) → an `automatic-instance-deleting` pass **spares** it (renew bought
+  a day) → collapse the policy back to `expiration:0d` → the next pass **deletes** the
+  instance **and** volume, sets `status:deleted`, **posts the expiration notice**, and
+  closes the issue.
 - **auto-shelve:** inject `timeout:0hrs` → `automatic-instance-shelving` shelves it.
 - **auto-volume-delete:** detach the instance, mark `volume:expiration-pending`, dispatch
   with `graceperiod=0` → `automatic-volume-deleting` deletes the volume.
@@ -90,9 +96,10 @@ of `m3.tiny`). The cron derives an instance's age from its issue's `created_at`,
   triggers and asserts — it never comments on sub-issues. (Set `E2E_WORKSHOP_PARENT` to
   reuse a live workshop and skip the build.)
 
-> **Not covered:** the renewal *warning* email — it only fires for an instance aged into
-> the 7-day window of an expiration > 7 days, which label injection on a fresh instance
-> can't simulate. Full per-workflow audit: DESIGN.md §12.
+> The renewal-warning emails are covered via the fractional-rung trick above (a 7.2-day
+> rung is > 7 — not workshop-skipped — yet computes ≤ 7 days remaining on a fresh
+> instance). What stays uncovered is the *aging* itself: the cron's day arithmetic over a
+> real multi-week lifetime. Full per-workflow audit: DESIGN.md §12.
 
 ## How it works
 
