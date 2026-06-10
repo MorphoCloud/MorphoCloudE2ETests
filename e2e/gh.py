@@ -215,14 +215,23 @@ class GitHubClient:
             json={"ref": ref, "inputs": inputs or {}},
         )
 
-    def _runs(self, filename: str, *, since: datetime, event: str | None = None) -> list[dict]:
+    def _runs(self, filename: str, *, since: datetime, event: str | None = None,
+              title: str | None = None) -> list[dict]:
         path = (
             f"/repos/{self.repo}/actions/workflows/{filename}/runs"
             f"?created=>={_iso(since)}&per_page=30"
         )
         if event:
             path += f"&event={event}"
-        return self._req("GET", path).json().get("workflow_runs", [])
+        runs = self._req("GET", path).json().get("workflow_runs", [])
+        if title is not None:
+            # For issue_comment-triggered workflows the run's display_title is the
+            # issue title — filtering by it pins the run to OUR issue. Without it,
+            # a lagging run spawned by a neighbouring test's comment (every comment
+            # fires every issue_comment workflow, usually as 'skipped') can be the
+            # newest match and win the race.
+            runs = [r for r in runs if r.get("display_title") == title]
+        return runs
 
     def failed_steps(self, run_id: int) -> list[str]:
         """Names of the steps that concluded 'failure' in a run (across its jobs)."""
@@ -235,14 +244,15 @@ class GitHubClient:
         ]
 
     def wait_for_run(self, filename: str, *, since: datetime, timeout: float,
-                     event: str | None = None) -> dict[str, Any] | None:
+                     event: str | None = None,
+                     title: str | None = None) -> dict[str, Any] | None:
         """Wait for the newest run of `filename` created at/after `since` to complete.
 
         Returns the completed run dict (inspect ['conclusion']), or None if no run
         appeared within `timeout` (e.g. the trigger's `if:` gated it out).
         """
         def newest():
-            runs = self._runs(filename, since=since, event=event)
+            runs = self._runs(filename, since=since, event=event, title=title)
             return runs[0] if runs else None
 
         deadline = time.monotonic() + timeout

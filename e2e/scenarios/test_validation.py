@@ -21,8 +21,10 @@ pytestmark = pytest.mark.cheap
 
 
 def _assert_run(admin: GitHubClient, filename: str, *, since, expected: str,
-                event: str | None = None, timeout: float = config.TIMEOUT_WORKFLOW_RUN):
-    run = admin.wait_for_run(filename, since=since, timeout=timeout, event=event)
+                event: str | None = None, title: str | None = None,
+                timeout: float = config.TIMEOUT_WORKFLOW_RUN):
+    run = admin.wait_for_run(filename, since=since, timeout=timeout, event=event,
+                             title=title)
     assert run is not None, f"{filename} did not run (no run created since {since.isoformat()})"
     assert run.get("status") == "completed", f"{filename} did not complete: {run.get('status')}"
     assert run.get("conclusion") == expected, (
@@ -45,7 +47,8 @@ def test_unknown_instance_command(bot, admin, issues):
     comment = bot.wait_for_comment(num, "Unrecognized Commands", since=since)
     assert "not recognized" in comment["body"]
     _assert_run(admin, "validate-command-instance.yml", since=since,
-                expected="failure", event="issue_comment")
+                expected="failure", event="issue_comment",
+                title=f"{config.TITLE_PREFIX} unknown instance command")
 
 
 def test_unknown_workshop_command(bot, admin, issues):
@@ -60,7 +63,8 @@ def test_unknown_workshop_command(bot, admin, issues):
     comment = bot.wait_for_comment(num, "Unrecognized Commands", since=since)
     assert "not recognized" in comment["body"]
     _assert_run(admin, "validate-command-workshop.yml", since=since,
-                expected="failure", event="issue_comment")
+                expected="failure", event="issue_comment",
+                title=f"{config.TITLE_PREFIX} unknown workshop command")
 
 
 # --------------------------------------------------------------------------------------
@@ -73,7 +77,8 @@ def test_admin_mention(bot, admin, issues):
     since = utcnow()
     bot.comment(num, "Pinging @MorphoCloud/morphocloud-admins for an E2E mention test.")
     _assert_run(admin, "on-admin-mention.yml", since=since,
-                expected="success", event="issue_comment")
+                expected="success", event="issue_comment",
+                title=f"{config.TITLE_PREFIX} admin mention")
 
 
 # --------------------------------------------------------------------------------------
