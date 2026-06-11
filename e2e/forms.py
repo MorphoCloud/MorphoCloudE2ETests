@@ -23,10 +23,9 @@ def _section(heading: str, value: str) -> str:
     return f"### {heading}\n\n{value}\n\n"
 
 
-def individual_body(flavor: str = config.E2E_FLAVOR, description: str = _TAG) -> str:
-    return (
-        _section("Cloud Computing Instance Flavor", f"{flavor} - E2E test flavor")
-        + _section("Description", description)
+def individual_body(flavor: str = config.E2E_FLAVOR) -> str:
+    return _section(
+        "Cloud Computing Instance Flavor", f"{flavor} - E2E test flavor"
     ).rstrip() + "\n"
 
 
