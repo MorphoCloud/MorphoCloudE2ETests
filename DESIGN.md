@@ -46,16 +46,16 @@ real time**, using short-expiry test labels that are the cleanup analog of `m3.t
   of the deletion window and *not* get deleted.
 - **`automatic-instance-shelving`** — forced via a `timeout:0hrs` label (uptime > 0 →
   shelve-eligible immediately).
-- **`automatic-instance-deleting`** (+ renewal warning via `send-renewal-email`) — the
+- **`close-expired-issues`** (+ renewal warning via `send-renewal-email`) — the
   warning path forced via `expiration:1d` (lands inside the 7-day window); actual
   deletion forced via `expiration:0d` (created_at + 0 → already past).
 - **`automatic-volume-deleting`** — forced via the workflow's own
   `expiration_graceperiod_days=0` dispatch input on a `volume:expiration-pending` volume.
-- **Workshop teardown** is driven by **`automatic-instance-deleting.yml`** (the
+- **Workshop teardown** is driven by **`close-expired-issues.yml`** (the
   window-anchored lifecycle cron), **not** by comments on sub-issues — `/delete_all`
   isn't even a valid workshop command. That workflow deletes each instance+volume,
   **closes each sub-issue, and closes the parent** once all sub-issues are closed
-  ([automatic-instance-deleting.yml:150-200](MorphoCloudWorkflow/.github/workflows/automatic-instance-deleting.yml#L150-L200)).
+  ([close-expired-issues.yml:150-200](MorphoCloudWorkflow/.github/workflows/close-expired-issues.yml#L150-L200)).
   The test **triggers** that workflow (after injecting `expiration:0d` on each
   sub-issue) and asserts it did the teardown — it does not reimplement deletion. The
   dedicated harness **`test-workshop-deletion.yml`** (`workflow_dispatch`,
@@ -66,7 +66,7 @@ real time**, using short-expiry test labels that are the cleanup analog of `m3.t
 All are `workflow_dispatch`-able (the runner-1 crontab already fires them that way), so
 the harness triggers them on demand after injecting the appropriate label — no schedule,
 no 60-day wait. Expiry/renewal mechanics verified in
-`automatic-instance-deleting.yml` + `update-renew-label.yml` (2026-06-08).
+`close-expired-issues.yml` + `update-renew-label.yml` (2026-06-08).
 
 ### Validation / negative paths (Phase 1 — cheap, no provisioning)
 Unknown command, non-member `/create`, quota exceeded, workshop `>5 days`, workshop
@@ -279,7 +279,7 @@ Phase D  CLEANUP pathways — ONLY if Phase C fully passed. These ARE the teardo
            • individual explicit: /delete_instance → /delete_volume (and a /delete_all)
            • auto-volume-delete via expiration_graceperiod_days=0
            • workshop: inject expiration:0d on each sub-issue, dispatch
-             automatic-instance-deleting once → it deletes all instances+volumes,
+             close-expired-issues once → it deletes all instances+volumes,
              closes all sub-issues, closes parent. Assert that outcome (no comments).
          Assert end state: zero E2E instances/volumes/orphan FIPs remain.
 Phase E  Post-run sweeper (safety net) — force-delete anything still standing.
@@ -310,7 +310,7 @@ one-time. **Items marked ⚠️ need a decision or a credential from you.**
   - `expiration:1d`, `expiration:2d`, `renewed:1`, `renewed:2` **already exist** in
     `labels.yml` (so they're on Test-Instances already) — used for the warning + renew
     tests. (Auto-delete reads `expiration:Nd` as `created_at + N days`; `renewed:N`
-    selects which expiration applies — verified in `automatic-instance-deleting.yml`.)
+    selects which expiration applies — verified in `close-expired-issues.yml`.)
   - `expiration:0d` and `timeout:0hrs` are **test-only** (not in `labels.yml`); the
     harness creates them with `gh label create --force` **after Stage 0** (so a
     labels-sync triggered by vendorize can't prune them mid-run). `expiration:0d` →
@@ -427,15 +427,15 @@ this block is skipped and the **Phase E sweeper** force-deletes instead.
 
 | Pathway | Setup (no waiting) | Trigger | Assert |
 |---------|--------------------|---------|--------|
-| `/renew` ↔ auto-delete | on the live individual issue, replace expiration labels with `expiration:1d` + `expiration:2d` | dispatch `automatic-instance-deleting` | instance is in the ≤7-day window → renewal **warning email** arrives + `renewal-notice:*` label set; instance **not** deleted. |
-| `/renew` protects | (continuing) | comment `/renew`, then dispatch `automatic-instance-deleting` again | `renewed:1` added, `renewal-notice:*` cleared; expiration now uses `2d`; instance still **not** deleted (renew pushed it out). |
+| `/renew` ↔ auto-delete | on the live individual issue, replace expiration labels with `expiration:1d` + `expiration:2d` | dispatch `close-expired-issues` | instance is in the ≤7-day window → renewal **warning email** arrives + `renewal-notice:*` label set; instance **not** deleted. |
+| `/renew` protects | (continuing) | comment `/renew`, then dispatch `close-expired-issues` again | `renewed:1` added, `renewal-notice:*` cleared; expiration now uses `2d`; instance still **not** deleted (renew pushed it out). |
 | Auto-shelve | apply `timeout:0hrs` to a running instance | dispatch `automatic-instance-shelving` | instance shelves; `status:shelved`; OS `SHELVED_OFFLOADED`; FIP disassociated. (Unshelve it back if a later step needs it running.) |
 | `/delete_instance` | live instance | comment `/delete_instance` | instance gone in OpenStack; **volume remains**; labels reflect deleted. |
 | `/delete_volume` | (continuing) | comment `/delete_volume` | volume gone. |
 | `/delete_all` | one fresh/remaining instance | comment `/delete_all` | instance **and** volume gone in one shot; FIP released. |
-| Auto-delete (real deletion) | apply `expiration:0d` (created_at+0 → already past), remove other `expiration:*` | dispatch `automatic-instance-deleting` | volume deleted first, then instance deleted via `control-instance-from-workflow`; `volume:deleted`; issue handling per workflow. |
+| Auto-delete (real deletion) | apply `expiration:0d` (created_at+0 → already past), remove other `expiration:*` | dispatch `close-expired-issues` | volume deleted first, then instance deleted via `control-instance-from-workflow`; `volume:deleted`; issue handling per workflow. |
 | Auto-volume-delete | a volume carrying `volume:expiration-pending` | dispatch `automatic-volume-deleting` with `expiration_graceperiod_days=0` | volume past grace → deleted; `volume:expiration-pending` removed. |
-| **Workshop full cleanup** (real lifecycle path) | inject `expiration:0d` on **each** of the 2 sub-issues (label only — no comments) | dispatch **`automatic-instance-deleting.yml`** once | the workflow itself: deletes **every** workshop instance + volume; **closes every sub-issue**; **closes the parent** (last-sub-issue logic); **zero** workshop-prefixed resources remain in OpenStack. *(Named acceptance criterion — leak-free workshop teardown. We trigger + assert; we do NOT post commands on sub-issues, and do NOT reimplement deletion.)* |
+| **Workshop full cleanup** (real lifecycle path) | inject `expiration:0d` on **each** of the 2 sub-issues (label only — no comments) | dispatch **`close-expired-issues.yml`** once | the workflow itself: deletes **every** workshop instance + volume; **closes every sub-issue**; **closes the parent** (last-sub-issue logic); **zero** workshop-prefixed resources remain in OpenStack. *(Named acceptance criterion — leak-free workshop teardown. We trigger + assert; we do NOT post commands on sub-issues, and do NOT reimplement deletion.)* |
 
 > Workshop note: cleanup is the cron's job, not a command — `/delete_all` is not a valid
 > workshop command and would be rejected by `validate-command-workshop`. `test-workshop-deletion.yml`
@@ -615,7 +615,7 @@ covered · **—** = out of scope.
 | Workflow | Cov | Where |
 |----------|:---:|-------|
 | `automatic-instance-shelving.yml` | Y | §6.4 via `timeout:0hrs` |
-| `automatic-instance-deleting.yml` | Y | §6.4 warning + deletion + workshop teardown |
+| `close-expired-issues.yml` | Y | §6.4 warning + deletion + workshop teardown |
 | `automatic-volume-deleting.yml` | Y | §6.4 via `expiration_graceperiod_days=0` |
 | `update-request-status-label.yml` | Y | §6.2 dispatch |
 | `collect-instance-uptime.yml` | y | §6.2 dispatch — asserts run success only (data-write not verified) |

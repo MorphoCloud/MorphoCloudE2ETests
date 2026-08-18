@@ -81,7 +81,7 @@ of `m3.tiny`). The cron derives an instance's age from its issue's `created_at`,
   **renewal email**; a second pass is **gated** (no re-warn/re-email); collapsing to a
   single `[expiration:7.2]` rung yields the **final-expiration email** ("No renewals
   remain") → then set the policy `[expiration:0d, expiration:1d]` and `/renew` (climbs
-  to the `1d` rung) → an `automatic-instance-deleting` pass **spares** it (renew bought
+  to the `1d` rung) → an `close-expired-issues` pass **spares** it (renew bought
   a day) → collapse the policy back to `expiration:0d` → the next pass **deletes** the
   instance **and** volume, sets `status:deleted`, **posts the expiration notice**, and
   closes the issue.
@@ -91,7 +91,7 @@ of `m3.tiny`). The cron derives an instance's age from its issue's `created_at`,
 
 ### `workshop-lifecycle` — the workshop teardown the cron does (~45 min)
 - stands up its own 2-instance workshop, then injects `expiration:0d` on **each**
-  sub-issue → a single `automatic-instance-deleting` pass deletes **every**
+  sub-issue → a single `close-expired-issues` pass deletes **every**
   instance+volume, closes **all** sub-issues, **and** closes the parent. The harness only
   triggers and asserts — it never comments on sub-issues. (Set `E2E_WORKSHOP_PARENT` to
   reuse a live workshop and skip the build.)
