@@ -38,7 +38,7 @@ def test_individual_lifecycle_management(bot, admin, os_client, ensure_test_labe
     """Full individual-instance lifecycle management, end to end, no real waiting.
 
     Mirrors production: an instance carries an expiration policy; the daily
-    `automatic-instance-deleting` cron enforces it; `/renew` buys the next rung of the
+    `close-expired-issues` cron enforces it; `/renew` buys the next rung of the
     expiration ladder. Forced deterministically with short-expiry labels — the cron
     measures age from the issue's `created_at`, so `expiration:0d` ('created_at + 0' =
     already past) fires immediately, while a longer rung like `expiration:1d` stays in
@@ -71,8 +71,8 @@ def test_individual_lifecycle_management(bot, admin, os_client, ensure_test_labe
     admin.ensure_label("expiration:30", color="892368", description="E2E: renewal headroom rung")
     admin.set_expiration_labels(num, ["expiration:7.2", "expiration:30"])
     since = utcnow()
-    admin.dispatch_workflow("automatic-instance-deleting.yml")
-    run = admin.wait_for_run("automatic-instance-deleting.yml", since=since,
+    admin.dispatch_workflow("close-expired-issues.yml")
+    run = admin.wait_for_run("close-expired-issues.yml", since=since,
                              timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
     assert run and run.get("conclusion") == "success"
     warn = admin.wait_for_comment(num, "will be deleted in", since=since)
@@ -84,8 +84,8 @@ def test_individual_lifecycle_management(bot, admin, os_client, ensure_test_labe
     # anti-spam: a second pass must neither re-warn nor re-email
     n_before = len(admin.list_comments(num))
     since = utcnow()
-    admin.dispatch_workflow("automatic-instance-deleting.yml")
-    run = admin.wait_for_run("automatic-instance-deleting.yml", since=since,
+    admin.dispatch_workflow("close-expired-issues.yml")
+    run = admin.wait_for_run("close-expired-issues.yml", since=since,
                              timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
     assert run and run.get("conclusion") == "success"
     assert len(admin.list_comments(num)) == n_before, \
@@ -97,8 +97,8 @@ def test_individual_lifecycle_management(bot, admin, os_client, ensure_test_labe
             admin.remove_label(num, lbl)
     admin.set_expiration_labels(num, ["expiration:7.2"])
     since = utcnow()
-    admin.dispatch_workflow("automatic-instance-deleting.yml")
-    run = admin.wait_for_run("automatic-instance-deleting.yml", since=since,
+    admin.dispatch_workflow("close-expired-issues.yml")
+    run = admin.wait_for_run("close-expired-issues.yml", since=since,
                              timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
     assert run and run.get("conclusion") == "success"
     warn = admin.wait_for_comment(num, "will be deleted in", since=since)
@@ -127,8 +127,8 @@ def test_individual_lifecycle_management(bot, admin, os_client, ensure_test_labe
         f"renew confirmation must state the new expiration date: {ack['body']!r}"
 
     since = utcnow()
-    admin.dispatch_workflow("automatic-instance-deleting.yml")
-    run = admin.wait_for_run("automatic-instance-deleting.yml", since=since,
+    admin.dispatch_workflow("close-expired-issues.yml")
+    run = admin.wait_for_run("close-expired-issues.yml", since=since,
                              timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
     assert run and run.get("conclusion") == "success"
     # Deletion deletes the volume INLINE (sets volume:deleted) before the run concludes,
@@ -146,8 +146,8 @@ def test_individual_lifecycle_management(bot, admin, os_client, ensure_test_labe
     admin.set_expiration_labels(num, [config.TEST_LABEL_EXPIRE_NOW])  # single rung, already past
 
     since = utcnow()
-    admin.dispatch_workflow("automatic-instance-deleting.yml")
-    run = admin.wait_for_run("automatic-instance-deleting.yml", since=since,
+    admin.dispatch_workflow("close-expired-issues.yml")
+    run = admin.wait_for_run("close-expired-issues.yml", since=since,
                              timeout=config.TIMEOUT_COMMAND, event="workflow_dispatch")
     assert run and run.get("conclusion") == "success"
     # cleaned up: status:deleted label, and (with OS creds) instance + volume gone.
@@ -202,7 +202,7 @@ def test_auto_volume_delete(bot, admin, os_client, ensure_test_labels, issues):
 @pytest.mark.workshop_lifecycle
 def test_workshop_lifecycle_cleanup(bot, admin, os_client, ensure_test_labels, issues):
     """The workshop teardown the cron performs: inject expiration:0d on each sub-issue,
-    dispatch automatic-instance-deleting once → it deletes every instance+volume, closes
+    dispatch close-expired-issues once → it deletes every instance+volume, closes
     every sub-issue, and closes the parent. We TRIGGER + assert; we never comment on subs.
 
     Self-contained: stands up its own 2-instance workshop (the shared helpers), unless
@@ -225,8 +225,8 @@ def test_workshop_lifecycle_cleanup(bot, admin, os_client, ensure_test_labels, i
         admin.set_expiration_labels(n, [config.TEST_LABEL_EXPIRE_NOW])
 
     since = utcnow()
-    admin.dispatch_workflow("automatic-instance-deleting.yml")
-    admin.wait_for_run("automatic-instance-deleting.yml", since=since,
+    admin.dispatch_workflow("close-expired-issues.yml")
+    admin.wait_for_run("close-expired-issues.yml", since=since,
                        timeout=config.TIMEOUT_CREATE, event="workflow_dispatch")
 
     # every sub-issue closed, every resource gone, parent closed
